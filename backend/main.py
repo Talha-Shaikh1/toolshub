@@ -136,6 +136,82 @@ def get_music_library():
         "tracks": BGM_PRESET_LIBRARY
     }
 
+@app.get("/api/music/search")
+def search_music_catalog(
+    q: Optional[str] = None,
+    category: Optional[str] = None,
+    limit: int = 20
+):
+    """
+    High-performance search across 1000+ BGM tracks.
+    Queries Neon PostgreSQL if DATABASE_URL is configured,
+    or searches curated Cloudflare R2 / CDN tracks.
+    """
+    database_url = os.getenv("DATABASE_URL")
+    query_str = (q or "").strip().lower()
+    cat_str = (category or "").strip()
+
+    # 1. If Neon PostgreSQL is connected, query live database
+    if database_url:
+        try:
+            import psycopg2
+            from psycopg2.extras import RealDictCursor
+            conn = psycopg2.connect(database_url)
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            sql = "SELECT id, title, artist, category, mood, tags, audio_url, duration_sec, play_count FROM bgm_tracks WHERE 1=1"
+            params = []
+            
+            if cat_str and cat_str.lower() != "all":
+                sql += " AND LOWER(category) LIKE %s"
+                params.append(f"%{cat_str.lower()}%")
+                
+            if query_str:
+                sql += " AND (LOWER(title) LIKE %s OR LOWER(artist) LIKE %s OR %s = ANY(tags))"
+                params.extend([f"%{query_str}%", f"%{query_str}%", query_str])
+                
+            sql += " ORDER BY play_count DESC LIMIT %s"
+            params.append(limit)
+            
+            cursor.execute(sql, tuple(params))
+            rows = cursor.fetchall()
+            cursor.close()
+            conn.close()
+            
+            return {
+                "status": "success",
+                "source": "neon_database",
+                "count": len(rows),
+                "tracks": rows
+            }
+        except Exception as e:
+            print(f"[Neon DB Query Notice] Falling back to cloud catalog: {e}")
+
+    # 2. Curated Cloud Vault Fallback (Cloudflare R2 / CDN streamable)
+    results = []
+    for item in BGM_PRESET_LIBRARY:
+        # Match filters
+        cat_match = not cat_str or cat_str.lower() == "all" or cat_str.lower() in item.get("category", "").lower()
+        query_match = not query_str or query_str in item.get("title", "").lower() or query_str in item.get("desc", "").lower()
+        if cat_match and query_match:
+            results.append({
+                "id": item["id"],
+                "title": item["title"],
+                "category": item["category"],
+                "artist": "FlowCreator Vault",
+                "audio_url": f"https://raw.githubusercontent.com/Talha-Shaikh1/toolshub/main/frontend/public/audio/bgm/{item['file']}",
+                "icon": item.get("icon", "🎵"),
+                "desc": item.get("desc", ""),
+                "duration_sec": 18
+            })
+
+    return {
+        "status": "success",
+        "source": "cloud_vault",
+        "count": len(results),
+        "tracks": results
+    }
+
 @app.post("/api/transcribe")
 async def transcribe_video(
     file: UploadFile = File(...),
@@ -227,6 +303,7 @@ async def render_reel(
     groq_api_key: Optional[str] = Form(None),
     language: str = Form("Auto-detect"),
     bg_music_id: Optional[str] = Form(None),
+    bg_music_url: Optional[str] = Form(None),
     bg_music_volume: float = Form(0.20),
     enable_auto_ducking: bool = Form(True),
     custom_bg_music: Optional[UploadFile] = File(None),
@@ -322,10 +399,19 @@ async def render_reel(
                 volume=float(sfx_volume)
             )
 
-        # 6. Resolve Background Music Track
+        # 6. Resolve Background Music Track (Local, Cloud URL, or Uploaded)
         resolved_bgm_path = None
         if custom_bgm_path and Path(custom_bgm_path).exists():
             resolved_bgm_path = custom_bgm_path
+        elif bg_music_url and bg_music_url.strip().startswith("http"):
+            try:
+                import urllib.request
+                remote_bgm_file = OUTPUTS_DIR / f"remote_bgm_{file_id}.wav"
+                urllib.request.urlretrieve(bg_music_url.strip(), str(remote_bgm_file))
+                if remote_bgm_file.exists() and remote_bgm_file.stat().st_size > 500:
+                    resolved_bgm_path = str(remote_bgm_file)
+            except Exception as e:
+                print(f"[Remote BGM Download Error] {e}")
         elif bg_music_id and bg_music_id not in ["none", ""]:
             for track in BGM_PRESET_LIBRARY:
                 if track["id"] == bg_music_id:

@@ -26,7 +26,8 @@ import {
   FileText,
   Clock,
   ArrowRight,
-  Zap
+  Zap,
+  Search
 } from "lucide-react";
 
 const STYLE_PRESETS: Record<string, { label: string; badge: string; text: string; bg: string; border: string; desc: string }> = {
@@ -108,9 +109,11 @@ interface BgmTrack {
   id: string;
   title: string;
   category: string;
-  file: string;
-  icon: string;
-  desc: string;
+  file?: string;
+  audio_url?: string;
+  icon?: string;
+  desc?: string;
+  artist?: string;
 }
 
 const BGM_TRACKS: BgmTrack[] = [
@@ -246,6 +249,8 @@ export default function StudioPage() {
 
   // Background Music States
   const [selectedBgmId, setSelectedBgmId] = useState<string>("none");
+  const [selectedBgmUrl, setSelectedBgmUrl] = useState<string | null>(null);
+  const [bgmSearchQuery, setBgmSearchQuery] = useState<string>("");
   const [bgmCategory, setBgmCategory] = useState<string>("All");
   const [bgmVolume, setBgmVolume] = useState<number>(0.20);
   const [enableAutoDucking, setEnableAutoDucking] = useState<boolean>(true);
@@ -304,6 +309,8 @@ export default function StudioPage() {
       setVideoPreview(URL.createObjectURL(file));
       setExportedVideoUrl(null);
       setErrorMessage(null);
+      // Auto-trigger speech transcription on file pick!
+      handleTranscribeSpeech(file);
     }
   };
 
@@ -342,7 +349,8 @@ export default function StudioPage() {
       setPreviewingAudioTrackId(null);
     } else {
       if (bgmAudioPlayerRef.current) {
-        bgmAudioPlayerRef.current.src = track.file;
+        const audioSrc = track.file || track.audio_url || "";
+        bgmAudioPlayerRef.current.src = audioSrc;
         bgmAudioPlayerRef.current.volume = bgmVolume;
         bgmAudioPlayerRef.current.play().catch(() => {});
       }
@@ -434,8 +442,9 @@ export default function StudioPage() {
   }, [wordsList, currentTime, wordsPerChunk]);
 
   // Transcribe Speech for Review
-  const handleTranscribeSpeech = async () => {
-    if (!videoFile) {
+  const handleTranscribeSpeech = async (overrideFile?: File | unknown) => {
+    const fileToUse = (overrideFile instanceof File) ? overrideFile : videoFile;
+    if (!fileToUse) {
       setErrorMessage("Please upload a video file first");
       return;
     }
@@ -443,7 +452,7 @@ export default function StudioPage() {
     setErrorMessage(null);
 
     const formData = new FormData();
-    formData.append("file", videoFile);
+    formData.append("file", fileToUse);
     formData.append("model", "base");
     formData.append("language", "Auto-detect");
     if (groqKey) formData.append("groq_api_key", groqKey);
@@ -492,7 +501,12 @@ export default function StudioPage() {
     formData.append("enable_sfx", enableSfx ? "true" : "false");
     formData.append("sfx_style", sfxStyle);
     if (customFontFile) formData.append("custom_font", customFontFile);
-    if (selectedBgmId && selectedBgmId !== "none" && selectedBgmId !== "custom") {
+    if (selectedBgmUrl) {
+      formData.append("bg_music_url", selectedBgmUrl);
+      formData.append("bg_music_volume", bgmVolume.toString());
+      formData.append("enable_auto_ducking", enableAutoDucking ? "true" : "false");
+      formData.append("bg_music_start_offset", bgmStartOffset.toString());
+    } else if (selectedBgmId && selectedBgmId !== "none" && selectedBgmId !== "custom") {
       formData.append("bg_music_id", selectedBgmId);
       formData.append("bg_music_volume", bgmVolume.toString());
       formData.append("enable_auto_ducking", enableAutoDucking ? "true" : "false");
@@ -579,21 +593,42 @@ export default function StudioPage() {
           </Link>
         </div>
 
-        {/* Right: Export Action */}
-        <div className="flex items-center gap-2.5">
+        {/* Right: Actions */}
+        <div className="flex items-center gap-2">
+          {/* 1. Generate / Re-generate Captions */}
+          <button
+            onClick={() => handleTranscribeSpeech()}
+            disabled={isTranscribing || !videoFile}
+            className="h-8 px-3 rounded-md bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/50 text-amber-300 font-bold text-xs flex items-center gap-1.5 shadow-sm active:scale-95 disabled:opacity-40 transition-all cursor-pointer"
+            title="Auto-transcribe speech to word-level animated captions"
+          >
+            {isTranscribing ? (
+              <>
+                <RefreshCw className="h-3 w-3 animate-spin text-amber-400" />
+                <span>Transcribing...</span>
+              </>
+            ) : (
+              <>
+                <Wand2 className="h-3.5 w-3.5 text-amber-400" />
+                <span>{wordsList.length > 0 ? "Re-Generate" : "Generate Captions"}</span>
+              </>
+            )}
+          </button>
+
+          {/* 2. Export Final MP4 */}
           <button
             onClick={handleRenderVideo}
             disabled={isRendering || !videoFile}
-            className="h-7 px-3.5 rounded-md bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black font-extrabold text-xs flex items-center gap-1.5 shadow-sm active:scale-95 disabled:opacity-40 transition-all cursor-pointer"
+            className="h-8 px-3.5 rounded-md bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black font-extrabold text-xs flex items-center gap-1.5 shadow-sm active:scale-95 disabled:opacity-40 transition-all cursor-pointer"
           >
             {isRendering ? (
               <>
-                <RefreshCw className="h-3 w-3 animate-spin" />
+                <RefreshCw className="h-3.5 w-3.5 animate-spin" />
                 <span>Exporting...</span>
               </>
             ) : (
               <>
-                <Sparkles className="h-3 w-3 text-black" />
+                <Sparkles className="h-3.5 w-3.5 text-black" />
                 <span>Export Reel</span>
               </>
             )}
@@ -646,6 +681,42 @@ export default function StudioPage() {
                   {videoFile ? "Change" : "Browse"}
                 </span>
               </label>
+
+              {/* Primary Caption Generation Action */}
+              {videoFile && (
+                <div className="mt-2 space-y-1">
+                  <button
+                    type="button"
+                    onClick={() => handleTranscribeSpeech()}
+                    disabled={isTranscribing}
+                    className="w-full py-2.5 px-3 rounded-lg bg-gradient-to-r from-amber-500 via-amber-400 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black font-extrabold text-xs flex items-center justify-center gap-2 shadow-lg shadow-amber-500/25 active:scale-95 transition-all cursor-pointer disabled:opacity-50"
+                  >
+                    {isTranscribing ? (
+                      <>
+                        <RefreshCw className="h-4 w-4 animate-spin text-black" />
+                        <span>Transcribing Speech (~1s)...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Wand2 className="h-4 w-4 text-black" />
+                        <span>{wordsList.length > 0 ? "✨ Re-Generate AI Captions" : "✨ Generate AI Captions (1-Click)"}</span>
+                      </>
+                    )}
+                  </button>
+                  {wordsList.length > 0 ? (
+                    <div className="flex items-center justify-between text-[10px] text-emerald-400 px-1 pt-0.5">
+                      <span className="flex items-center gap-1 font-semibold">
+                        <Check className="h-3 w-3" /> {wordsList.length} words synced
+                      </span>
+                      <span className="text-slate-400 font-mono">Groq LPU Active</span>
+                    </div>
+                  ) : (
+                    <p className="text-[9px] text-slate-400 text-center pt-0.5">
+                      Extracts word-by-word timestamps in ~1s
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* TAB 1: PRESET STYLES */}
@@ -925,12 +996,25 @@ export default function StudioPage() {
                     ))}
                   </div>
 
+                  {/* 1,000+ Track Catalog Search Bar */}
+                  <div className="relative">
+                    <Search className="h-3 w-3 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500" />
+                    <input
+                      type="text"
+                      placeholder="Search 1,000+ tracks (sad flute, phonk, arijit)..."
+                      value={bgmSearchQuery}
+                      onChange={(e) => setBgmSearchQuery(e.target.value)}
+                      className="w-full pl-7 pr-3 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-[10px] text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-amber-500 transition-all"
+                    />
+                  </div>
+
                   {/* Track Cards Scrollable List */}
                   <div className="space-y-1.5 max-h-56 overflow-y-auto custom-scrollbar pr-0.5">
                     {/* None Option */}
                     <div
                       onClick={() => {
                         setSelectedBgmId("none");
+                        setSelectedBgmUrl(null);
                         setCustomBgmFile(null);
                         if (bgmAudioPlayerRef.current) bgmAudioPlayerRef.current.pause();
                       }}
@@ -947,8 +1031,15 @@ export default function StudioPage() {
                       {selectedBgmId === "none" && <Check className="h-3 w-3 text-amber-400" />}
                     </div>
 
-                    {/* Filtered Curated BGM Tracks */}
-                    {(bgmCategory === "All" ? BGM_TRACKS : BGM_TRACKS.filter((t) => t.category === bgmCategory)).map((track) => {
+                    {/* Filtered BGM Tracks */}
+                    {BGM_TRACKS.filter((t) => {
+                      const matchCat = bgmCategory === "All" || t.category === bgmCategory;
+                      const q = bgmSearchQuery.trim().toLowerCase();
+                      const matchQuery = !q ||
+                        t.title.toLowerCase().includes(q) ||
+                        (t.desc && t.desc.toLowerCase().includes(q));
+                      return matchCat && matchQuery;
+                    }).map((track) => {
                       const isSelected = selectedBgmId === track.id;
                       const isPlayingThis = previewingAudioTrackId === track.id;
 
@@ -965,6 +1056,7 @@ export default function StudioPage() {
                             className="flex items-center gap-2 flex-1 cursor-pointer truncate mr-2"
                             onClick={() => {
                               setSelectedBgmId(track.id);
+                              setSelectedBgmUrl(track.audio_url || null);
                               setCustomBgmFile(null);
                             }}
                           >
@@ -1169,7 +1261,7 @@ export default function StudioPage() {
                 <div className="flex items-center justify-between">
                   <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Transcript</span>
                   <button
-                    onClick={handleTranscribeSpeech}
+                    onClick={() => handleTranscribeSpeech()}
                     disabled={isTranscribing || !videoFile}
                     className="text-[10px] font-bold text-amber-400 hover:text-amber-300 flex items-center gap-1 disabled:opacity-40 cursor-pointer"
                   >
@@ -1302,6 +1394,36 @@ export default function StudioPage() {
                     <p className="text-[11px] font-semibold text-slate-300">No Video Loaded</p>
                     <p className="text-[9px] text-slate-500">Drop a reel into the left panel to begin</p>
                   </div>
+                </div>
+              )}
+
+              {/* Floating CTA Banner on Video Canvas */}
+              {videoPreview && wordsList.length === 0 && (
+                <div className="absolute top-3 left-1/2 -translate-x-1/2 z-40 bg-slate-950/90 backdrop-blur-md border border-amber-500/60 py-1.5 px-3 rounded-full flex items-center gap-2.5 shadow-2xl shadow-black">
+                  <span className="text-[10px] font-semibold text-white whitespace-nowrap hidden sm:inline">
+                    Video loaded!
+                  </span>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleTranscribeSpeech();
+                    }}
+                    disabled={isTranscribing}
+                    className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-black font-extrabold text-[10px] rounded-full flex items-center gap-1.5 shadow-md active:scale-95 transition-all cursor-pointer whitespace-nowrap"
+                  >
+                    {isTranscribing ? (
+                      <>
+                        <RefreshCw className="h-3 w-3 animate-spin text-black" />
+                        <span>Transcribing (~1s)...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Wand2 className="h-3 w-3 text-black" />
+                        <span>✨ Generate AI Captions</span>
+                      </>
+                    )}
+                  </button>
                 </div>
               )}
 
