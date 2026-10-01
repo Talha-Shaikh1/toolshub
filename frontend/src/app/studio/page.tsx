@@ -232,7 +232,10 @@ function getFontFamilyCss(fontChoice: string, customFontFamily?: string | null):
   return "'Arial Black', 'Impact', sans-serif";
 }
 
-const DEFAULT_API_URL = process.env.NEXT_PUBLIC_API_URL || "https://01talha-arqa-chatbot.hf.space";
+const LIVE_HF_BACKEND_URL = "https://01talha-arqa-chatbot.hf.space";
+const DEFAULT_API_URL = (process.env.NEXT_PUBLIC_API_URL && !process.env.NEXT_PUBLIC_API_URL.includes("localhost"))
+  ? process.env.NEXT_PUBLIC_API_URL
+  : LIVE_HF_BACKEND_URL;
 
 export default function StudioPage() {
   const [leftNav, setLeftNav] = useState<"style" | "font" | "magic" | "audio" | "script">("style");
@@ -330,12 +333,18 @@ export default function StudioPage() {
     setShowSettingsModal(false);
   };
 
-  // Ping backend health
+  // Ping backend health & auto-fallback if localhost offline
   useEffect(() => {
-    fetch(`${apiUrl}/api/health`)
+    fetch(`${apiUrl}/api/health`, { signal: AbortSignal.timeout(3000) })
       .then((res) => res.json())
       .then((data) => setApiOnline(data.status === "healthy" || data.status === "ok"))
-      .catch(() => setApiOnline(false));
+      .catch(() => {
+        if (apiUrl.includes("localhost") || apiUrl.includes("127.0.0.1")) {
+          setApiUrl(LIVE_HF_BACKEND_URL);
+        } else {
+          setApiOnline(false);
+        }
+      });
   }, [apiUrl]);
 
   // Video Selection (Only loads video, does NOT auto-transcribe)
@@ -750,10 +759,26 @@ export default function StudioPage() {
         description: "Burning subtitles, SFX, and ducked audio mix."
       });
 
-      const res = await fetch(`${apiUrl}/api/render`, {
-        method: "POST",
-        body: formData
-      });
+      let activeApi = apiUrl;
+      let res: Response;
+      try {
+        res = await fetch(`${activeApi}/api/render`, {
+          method: "POST",
+          body: formData
+        });
+      } catch (netErr) {
+        if (activeApi !== LIVE_HF_BACKEND_URL) {
+          console.warn("[Render Auto-Fallback] Switching to Live HF Space:", LIVE_HF_BACKEND_URL);
+          activeApi = LIVE_HF_BACKEND_URL;
+          setApiUrl(LIVE_HF_BACKEND_URL);
+          res = await fetch(`${LIVE_HF_BACKEND_URL}/api/render`, {
+            method: "POST",
+            body: formData
+          });
+        } else {
+          throw netErr;
+        }
+      }
 
       if (!res.ok) throw new Error(await res.text());
 

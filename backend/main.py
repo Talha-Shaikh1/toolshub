@@ -322,6 +322,9 @@ async def render_reel(
     with open(input_video_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
+    file_size_mb = input_video_path.stat().st_size / (1024 * 1024) if input_video_path.exists() else 0
+    print(f"🎬 [API Render Started] File: {file.filename} ({file_size_mb:.2f} MB), Style: {style_name}", flush=True)
+
     custom_font_path = None
     if custom_font:
         custom_font_path = str(OUTPUTS_DIR / f"font_{file_id}_{custom_font.filename}")
@@ -339,6 +342,7 @@ async def render_reel(
 
         # 1. Silence Cuts (Optional)
         if remove_silence:
+            print("✂️ [Remove Silence] Trimming audio gaps...", flush=True)
             trimmed_video = str(OUTPUTS_DIR / f"tight_{file_id}.mp4")
             active_video = remove_video_silences(active_video, trimmed_video, ffmpeg_path=ffmpeg_bin)
 
@@ -354,6 +358,7 @@ async def render_reel(
         else:
             effective_key = (groq_api_key or "").strip() or os.getenv("GROQ_API_KEY", "").strip()
             if effective_key:
+                print("⚡ [Transcribe Fallback] Calling Groq Cloud Whisper...", flush=True)
                 words = transcribe_audio_groq(
                     video_path=active_video,
                     api_key=effective_key,
@@ -361,6 +366,7 @@ async def render_reel(
                     ffmpeg_path=ffmpeg_bin
                 )
             else:
+                print("💻 [Transcribe Fallback] Running Fast Local Whisper (tiny)...", flush=True)
                 words = transcribe_audio_whisper(
                     video_path=active_video,
                     model_size="tiny",
@@ -368,7 +374,10 @@ async def render_reel(
                 )
 
         if not words:
+            print("⚠️ [Render Error] No words detected or provided in request.", flush=True)
             raise HTTPException(status_code=400, detail="No speech words detected or provided.")
+
+        print(f"📝 [Subtitles] {len(words)} words verified. Generating ASS subtitles for {width}x{height}...", flush=True)
 
         # 3. Font
         ass_font, font_file_path = resolve_font_info(font_choice=font_choice, custom_font_path=custom_font_path)
@@ -392,6 +401,7 @@ async def render_reel(
         # 5. SFX
         sfx_audio = None
         if enable_sfx:
+            print("🔊 [SFX Engine] Generating sound effects track...", flush=True)
             sfx_audio = generate_sfx_audio_track(
                 words=words,
                 total_duration_sec=total_duration,
@@ -412,7 +422,7 @@ async def render_reel(
                 if remote_bgm_file.exists() and remote_bgm_file.stat().st_size > 500:
                     resolved_bgm_path = str(remote_bgm_file)
             except Exception as e:
-                print(f"[Remote BGM Download Error] {e}")
+                print(f"[Remote BGM Download Error] {e}", flush=True)
         elif bg_music_id and bg_music_id not in ["none", ""]:
             for track in BGM_PRESET_LIBRARY:
                 if track["id"] == bg_music_id:
@@ -420,6 +430,8 @@ async def render_reel(
                     if possible_path.exists():
                         resolved_bgm_path = str(possible_path)
                     break
+
+        print(f"🎬 [FFmpeg Burning] Starting render ({total_duration:.1f}s, threads=0, preset=ultrafast)...", flush=True)
 
         # 7. Burn Subtitles, SFX, and Background Music with Auto-Ducking
         burn_subtitles_into_video(
@@ -436,11 +448,17 @@ async def render_reel(
             bg_music_start_offset=float(bg_music_start_offset)
         )
 
+        out_size_mb = output_video_path.stat().st_size / (1024 * 1024) if output_video_path.exists() else 0
+        print(f"🎉 [Render Complete] File ready: {out_size_mb:.2f} MB. Streaming to client.", flush=True)
+
         return FileResponse(
             str(output_video_path),
             media_type="video/mp4",
             filename=f"viral_reel_{file_id}.mp4"
         )
+    except Exception as e:
+        print(f"❌ [Render Failed] {e}", flush=True)
+        raise
 
     finally:
         if input_video_path.exists():
