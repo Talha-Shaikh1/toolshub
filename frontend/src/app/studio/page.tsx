@@ -27,7 +27,9 @@ import {
   Clock,
   ArrowRight,
   Zap,
-  Search
+  Search,
+  AlertTriangle,
+  X
 } from "lucide-react";
 
 const STYLE_PRESETS: Record<string, { label: string; badge: string; text: string; bg: string; border: string; desc: string }> = {
@@ -470,7 +472,12 @@ export default function StudioPage() {
       }
       setLeftNav("script");
     } catch (err: any) {
-      setErrorMessage(`Transcription Error: ${err.message || "Failed to transcribe audio"}`);
+      const rawMsg = err.message || "";
+      if (rawMsg.includes("Failed to fetch") || rawMsg.includes("NetworkError") || rawMsg.includes("Load failed")) {
+        setErrorMessage("Cannot connect to backend server. If using Hugging Face Space, it may be waking up from sleep (~30s). Please wait a moment and try again.");
+      } else {
+        setErrorMessage(`Transcription Error: ${rawMsg || "Failed to transcribe audio"}`);
+      }
     } finally {
       setIsTranscribing(false);
     }
@@ -541,7 +548,12 @@ export default function StudioPage() {
       setRenderProgress(100);
       setRenderStep("Export complete!");
     } catch (err: any) {
-      setErrorMessage(`Rendering failed: ${err.message || "Unknown error"}`);
+      const rawMsg = err.message || "";
+      if (rawMsg.includes("Failed to fetch") || rawMsg.includes("NetworkError") || rawMsg.includes("Load failed")) {
+        setErrorMessage("Cannot connect to backend server. Hugging Face Space may be waking up. Please wait ~30 seconds and retry export.");
+      } else {
+        setErrorMessage(`Rendering failed: ${rawMsg || "Unknown error"}`);
+      }
     } finally {
       setIsRendering(false);
     }
@@ -551,6 +563,30 @@ export default function StudioPage() {
 
   return (
     <div className="h-screen w-screen overflow-hidden bg-[#0A0D14] text-slate-100 flex flex-col font-sans select-none">
+      {/* GLOBAL DISMISSIBLE ERROR NOTIFICATION TOAST */}
+      {errorMessage && (
+        <div className="fixed top-14 right-4 sm:right-6 z-50 max-w-md w-full bg-red-950/95 border-2 border-red-500/80 backdrop-blur-xl p-3.5 rounded-xl shadow-2xl shadow-black/80 flex items-start gap-3 animate-in fade-in slide-in-from-top-4">
+          <div className="h-8 w-8 rounded-lg bg-red-500/20 border border-red-500/40 flex items-center justify-center shrink-0 text-red-400">
+            <AlertTriangle className="h-4 w-4" />
+          </div>
+          <div className="flex-1 pr-1">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-red-200">Action Notice / Error</span>
+              <button
+                onClick={() => setErrorMessage(null)}
+                className="text-slate-400 hover:text-white p-0.5 rounded hover:bg-white/10 transition-all cursor-pointer"
+                title="Dismiss Error"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <p className="text-[11px] text-red-300 mt-1 leading-relaxed break-words font-medium">
+              {errorMessage}
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* 1. COMPACT PROFESSIONAL HEADER */}
       <header className="h-12 border-b border-slate-800/60 bg-[#0E121D] px-4 flex items-center justify-between z-50 shrink-0">
         {/* Left: Hub Navigation & Brand */}
@@ -715,6 +751,24 @@ export default function StudioPage() {
                       Extracts word-by-word timestamps in ~1s
                     </p>
                   )}
+                </div>
+              )}
+
+              {/* In-Context Error Alert */}
+              {errorMessage && (
+                <div className="mt-2.5 p-3 rounded-xl bg-red-950/70 border border-red-500/70 text-red-200 text-xs flex items-start gap-2.5 shadow-lg shadow-red-950/40">
+                  <AlertTriangle className="h-4 w-4 text-red-400 shrink-0 mt-0.5" />
+                  <div className="flex-1 min-w-0">
+                    <span className="font-bold text-[11px] text-red-300 block">Error / Issue</span>
+                    <p className="text-[10px] text-red-200/90 mt-0.5 leading-relaxed break-words font-medium">{errorMessage}</p>
+                  </div>
+                  <button
+                    onClick={() => setErrorMessage(null)}
+                    className="text-red-400 hover:text-white p-0.5 rounded cursor-pointer"
+                    title="Dismiss"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
                 </div>
               )}
             </div>

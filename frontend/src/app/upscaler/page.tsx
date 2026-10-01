@@ -14,7 +14,9 @@ import {
   SplitSquareVertical,
   Video,
   Settings,
-  ArrowRight
+  ArrowRight,
+  AlertTriangle,
+  X
 } from "lucide-react";
 
 const DEFAULT_API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:7860";
@@ -29,6 +31,7 @@ export default function UpscalerPage() {
   const [isUpscaling, setIsUpscaling] = useState<boolean>(false);
   const [upscaledUrl, setUpscaledUrl] = useState<string | null>(null);
   const [sliderPos, setSliderPos] = useState<number>(50);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   useEffect(() => {
     fetch(`${apiUrl}/api/health`)
@@ -43,6 +46,7 @@ export default function UpscalerPage() {
       setImageFile(file);
       setImagePreview(URL.createObjectURL(file));
       setUpscaledUrl(null);
+      setErrorMessage(null);
     }
   };
 
@@ -50,6 +54,7 @@ export default function UpscalerPage() {
     if (!imageFile) return;
 
     setIsUpscaling(true);
+    setErrorMessage(null);
     const formData = new FormData();
     formData.append("file", imageFile);
     formData.append("target_res", upscaleTarget);
@@ -63,7 +68,12 @@ export default function UpscalerPage() {
       const blob = await res.blob();
       setUpscaledUrl(URL.createObjectURL(blob));
     } catch (err: any) {
-      alert(`Upscale error: ${err.message}`);
+      const msg = err.message || "";
+      if (msg.includes("Failed to fetch") || msg.includes("NetworkError")) {
+        setErrorMessage("Cannot connect to backend server. Hugging Face Space may be waking up. Please wait ~30 seconds and retry.");
+      } else {
+        setErrorMessage(`Upscale Error: ${msg || "Failed to upscale image"}`);
+      }
     } finally {
       setIsUpscaling(false);
     }
@@ -71,6 +81,30 @@ export default function UpscalerPage() {
 
   return (
     <div className="h-screen w-screen overflow-hidden bg-[#0A0D14] text-slate-100 flex flex-col font-sans select-none">
+      {/* Error Toast */}
+      {errorMessage && (
+        <div className="fixed top-14 right-4 sm:right-6 z-50 max-w-md w-full bg-red-950/95 border-2 border-red-500/80 backdrop-blur-xl p-3.5 rounded-xl shadow-2xl shadow-black/80 flex items-start gap-3 animate-in fade-in slide-in-from-top-4">
+          <div className="h-8 w-8 rounded-lg bg-red-500/20 border border-red-500/40 flex items-center justify-center shrink-0 text-red-400">
+            <AlertTriangle className="h-4 w-4" />
+          </div>
+          <div className="flex-1 pr-1">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-red-200">Upscaler Error</span>
+              <button
+                onClick={() => setErrorMessage(null)}
+                className="text-slate-400 hover:text-white p-0.5 rounded hover:bg-white/10 transition-all cursor-pointer"
+                title="Dismiss"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <p className="text-[11px] text-red-300 mt-1 leading-relaxed break-words font-medium">
+              {errorMessage}
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <header className="h-12 border-b border-slate-800/60 bg-[#0E121D] px-4 flex items-center justify-between z-50 shrink-0">
         <div className="flex items-center gap-3">
