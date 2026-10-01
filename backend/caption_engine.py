@@ -900,6 +900,7 @@ def burn_subtitles_into_video(
         current_input_idx += 1
 
     if bg_music_path and Path(bg_music_path).exists():
+        cmd_inputs.extend(["-stream_loop", "-1"])
         if bg_music_start_offset > 0:
             cmd_inputs.extend(["-ss", f"{bg_music_start_offset:.2f}"])
         cmd_inputs.extend(["-i", bg_music_path])
@@ -910,8 +911,8 @@ def burn_subtitles_into_video(
     filter_complex_parts = [f"[0:v]{filter_str}[vout]"]
 
     if bgm_idx is not None:
-        # Loop background music continuously
-        bgm_prep = f"[{bgm_idx}:a]aloop=loop=-1:size=2e+09,volume={bg_music_volume:.2f}[bgm_raw]"
+        # Volume adjust for looped background music (no massive aloop buffer needed)
+        bgm_prep = f"[{bgm_idx}:a]volume={bg_music_volume:.2f}[bgm_raw]"
         filter_complex_parts.append(bgm_prep)
 
         if enable_auto_ducking:
@@ -940,27 +941,33 @@ def burn_subtitles_into_video(
         cmd = [
             ffmpeg_path,
             "-y",
+            "-threads", "0",
             *cmd_inputs,
             "-filter_complex", ";".join(filter_complex_parts),
             "-map", "[vout]",
             "-map", "[aout]",
             "-c:v", "libx264",
             "-preset", "ultrafast",
+            "-tune", "fastdecode",
             "-crf", crf,
             "-c:a", "aac",
             "-b:a", "192k",
+            "-movflags", "+faststart",
             output_video_path
         ]
     else:
         cmd = [
             ffmpeg_path,
             "-y",
+            "-threads", "0",
             "-i", video_path,
             "-vf", filter_str,
             "-c:v", "libx264",
             "-preset", "ultrafast",
+            "-tune", "fastdecode",
             "-crf", crf,
             "-c:a", "copy",
+            "-movflags", "+faststart",
             output_video_path
         ]
 

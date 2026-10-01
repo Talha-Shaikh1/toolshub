@@ -363,7 +363,7 @@ async def render_reel(
             else:
                 words = transcribe_audio_whisper(
                     video_path=active_video,
-                    model_size="base",
+                    model_size="tiny",
                     language=language
                 )
 

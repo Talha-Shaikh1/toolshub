@@ -12,6 +12,8 @@ import {
   Video,
   Sparkles,
   Volume2,
+  Volume1,
+  VolumeX,
   Scissors,
   Wand2,
   Download,
@@ -279,6 +281,8 @@ export default function StudioPage() {
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [duration, setDuration] = useState<number>(15);
+  const [videoVolume, setVideoVolume] = useState<number>(0.85);
+  const [isMuted, setIsMuted] = useState<boolean>(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   // Transcript & Words State
@@ -411,6 +415,78 @@ export default function StudioPage() {
       }
       setIsPlaying(!isPlaying);
     }
+  };
+
+  // Synchronize video volume & mute
+  useEffect(() => {
+    if (videoRef.current) {
+      videoRef.current.volume = isMuted ? 0 : videoVolume;
+      videoRef.current.muted = isMuted;
+    }
+  }, [videoVolume, isMuted, videoPreview]);
+
+  // Keyboard shortcut: Spacebar to toggle play/pause
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const activeTag = document.activeElement?.tagName;
+      if (activeTag === "INPUT" || activeTag === "TEXTAREA" || activeTag === "SELECT") return;
+      if (e.code === "Space") {
+        e.preventDefault();
+        togglePlay();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isPlaying]);
+
+  const toggleMute = () => {
+    setIsMuted((prev) => !prev);
+  };
+
+  const handleVolumeChange = (newVol: number) => {
+    setVideoVolume(newVol);
+    if (newVol > 0 && isMuted) {
+      setIsMuted(false);
+    }
+  };
+
+  const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!videoRef.current || !duration) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const pct = Math.max(0, Math.min(1, clickX / rect.width));
+    const targetTime = pct * duration;
+    videoRef.current.currentTime = targetTime;
+    setCurrentTime(targetTime);
+  };
+
+  const handleDownloadSrt = () => {
+    if (!wordsList || wordsList.length === 0) {
+      toast.error("No Captions to Export", { description: "Please generate AI captions first." });
+      return;
+    }
+    const pad = (n: number, z = 2) => String(Math.floor(n)).padStart(z, "0");
+    const formatTime = (sec: number) => {
+      const h = pad(sec / 3600);
+      const m = pad((sec % 3600) / 60);
+      const s = pad(sec % 60);
+      const ms = String(Math.floor((sec % 1) * 1000)).padStart(3, "0");
+      return `${h}:${m}:${s},${ms}`;
+    };
+    let srt = "";
+    wordsList.forEach((w, i) => {
+      srt += `${i + 1}\n${formatTime(w.start)} --> ${formatTime(w.end)}\n${w.word}\n\n`;
+    });
+    const blob = new Blob([srt], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${videoFile?.name.replace(/\.[^/.]+$/, "") || "reel"}_captions.srt`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success("SRT Subtitles Downloaded! 📄", {
+      description: "Instant 0-second file for Premiere, CapCut, or Instagram."
+    });
   };
 
   // Dynamic measurement of rendered canvas width
@@ -639,12 +715,40 @@ export default function StudioPage() {
       formData.append("bg_music_start_offset", bgmStartOffset.toString());
     }
     if (groqKey) formData.append("groq_api_key", groqKey);
-    if (editableTranscript) formData.append("words_json", editableTranscript);
+    // Guarantee words_json is passed so the backend NEVER re-transcribes from scratch
+    if (wordsList && wordsList.length > 0) {
+      formData.append("words_json", JSON.stringify(wordsList));
+    } else if (editableTranscript && editableTranscript.trim()) {
+      formData.append("words_json", editableTranscript);
+    }
+
+    let elapsedSeconds = 0;
+    const progressInterval = setInterval(() => {
+      elapsedSeconds += 1;
+      setRenderProgress((prev) => {
+        if (prev < 35) return prev + 4;
+        if (prev < 70) return prev + 2;
+        if (prev < 90) return prev + 1;
+        return 92;
+      });
+      setRenderStep((prev) => {
+        if (elapsedSeconds < 6) return "Uploading & parsing video streams...";
+        if (elapsedSeconds < 20) return "Burning vector subtitles & SFX with FFmpeg...";
+        return "Mastering audio ducking & finalizing MP4...";
+      });
+      toast.loading(`Rendering Viral Reel (${elapsedSeconds}s)...`, {
+        id: "export-reel",
+        description: "Burning high-retention subtitles & audio mix."
+      });
+    }, 1000);
 
     try {
-      setRenderProgress(45);
-      setRenderStep("Generating vector subtitles...");
-      toast.loading("Rendering Viral Reel...", { id: "export-reel", description: "Burning subtitles, SFX, and ducked audio mix." });
+      setRenderProgress(15);
+      setRenderStep("Uploading video to render engine...");
+      toast.loading("Rendering Viral Reel (0s)...", {
+        id: "export-reel",
+        description: "Burning subtitles, SFX, and ducked audio mix."
+      });
 
       const res = await fetch(`${apiUrl}/api/render`, {
         method: "POST",
@@ -653,8 +757,8 @@ export default function StudioPage() {
 
       if (!res.ok) throw new Error(await res.text());
 
-      setRenderProgress(85);
-      setRenderStep("Burning subtitles into MP4...");
+      setRenderProgress(95);
+      setRenderStep("Downloading rendered MP4...");
 
       const blob = await res.blob();
       const videoBlobUrl = URL.createObjectURL(blob);
@@ -663,7 +767,7 @@ export default function StudioPage() {
       setRenderStep("Export complete!");
       toast.success("Reel Ready to Download! 🎉", {
         id: "export-reel",
-        description: "Your captioned video has been rendered successfully."
+        description: `Rendered in ${elapsedSeconds}s with animated subtitles.`
       });
     } catch (err: any) {
       const rawMsg = err.message || "";
@@ -678,6 +782,7 @@ export default function StudioPage() {
         duration: 6000
       });
     } finally {
+      clearInterval(progressInterval);
       setIsRendering(false);
     }
   };
@@ -759,6 +864,18 @@ export default function StudioPage() {
                 <span>{wordsList.length > 0 ? "Re-Generate" : "Generate Captions"}</span>
               </>
             )}
+          </button>
+
+          {/* Instant Subtitles Download (0s Export) */}
+          <button
+            onClick={handleDownloadSrt}
+            disabled={wordsList.length === 0}
+            className="h-8 px-2.5 rounded-md bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white font-bold text-xs flex items-center gap-1.5 shadow-sm active:scale-95 disabled:opacity-40 transition-all cursor-pointer"
+            title="Instant 0-second subtitle export (.srt file for Premiere, CapCut, or Instagram)"
+          >
+            <FileText className="h-3.5 w-3.5 text-amber-400" />
+            <span className="hidden sm:inline">.SRT (Instant)</span>
+            <span className="sm:hidden">.SRT</span>
           </button>
 
           {/* 2. Export Final MP4 */}
@@ -1523,9 +1640,10 @@ export default function StudioPage() {
                   ref={videoRef}
                   src={videoPreview}
                   loop
-                  muted
+                  muted={isMuted}
                   playsInline
-                  className="w-full h-full object-contain"
+                  className="w-full h-full object-contain cursor-pointer"
+                  onClick={togglePlay}
                   onTimeUpdate={() => {
                     if (videoRef.current) setCurrentTime(videoRef.current.currentTime);
                   }}
@@ -1719,46 +1837,94 @@ export default function StudioPage() {
             </div>
           </div>
 
-          {/* 3. COMPACT BOTTOM TIMELINE */}
-          <div className="h-16 border-t border-slate-800/80 bg-[#090D16] flex items-center px-4 gap-3 shrink-0">
-            {/* Play / Pause mini button */}
-            <button
-              onClick={togglePlay}
-              className="h-8 w-8 rounded-full bg-amber-500 hover:bg-amber-400 text-black flex items-center justify-center shrink-0 cursor-pointer shadow-sm transition-all"
+          {/* 3. PROFESSIONAL BOTTOM TIMELINE & AUDIO CONTROLS */}
+          <div className="border-t border-slate-800/80 bg-[#090D16] flex flex-col shrink-0">
+            {/* Interactive Timeline Scrubber Line */}
+            <div
+              onClick={handleSeek}
+              className="w-full h-1.5 bg-slate-800 hover:h-2.5 transition-all cursor-pointer relative group"
+              title="Click or drag to seek in video"
             >
-              {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4 ml-0.5" />}
-            </button>
+              <div
+                className="h-full bg-gradient-to-r from-amber-500 to-orange-500 relative transition-all"
+                style={{ width: `${duration ? Math.min(100, (currentTime / duration) * 100) : 0}%` }}
+              >
+                <div className="absolute right-0 top-1/2 -translate-y-1/2 h-3.5 w-3.5 rounded-full bg-white shadow-lg shadow-amber-500/50 opacity-0 group-hover:opacity-100 transition-opacity transform translate-x-1/2" />
+              </div>
+            </div>
 
-            {/* Timecode */}
-            <span className="font-mono text-[11px] text-amber-400 font-bold shrink-0">
-              00:{currentTime < 10 ? "0" : ""}{currentTime.toFixed(1)} / 00:{duration < 10 ? "0" : ""}{duration.toFixed(1)}
-            </span>
+            {/* Controls Bar */}
+            <div className="h-14 flex items-center px-4 gap-3">
+              {/* Play / Pause button */}
+              <button
+                onClick={togglePlay}
+                className="h-8 w-8 rounded-full bg-amber-500 hover:bg-amber-400 text-black flex items-center justify-center shrink-0 cursor-pointer shadow-md active:scale-95 transition-all"
+                title={isPlaying ? "Pause (Space)" : "Play (Space)"}
+              >
+                {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4 ml-0.5" />}
+              </button>
 
-            {/* Word Track Pills */}
-            <div className="flex-1 flex items-center gap-1.5 overflow-x-auto py-1 custom-scrollbar">
-              {wordsList.map((item, idx) => {
-                const isWordActive = currentTime >= item.start && currentTime <= (item.end + 0.15);
-                return (
-                  <div
-                    key={idx}
-                    onClick={() => {
-                      if (videoRef.current) {
-                        videoRef.current.currentTime = item.start;
-                        setCurrentTime(item.start);
-                      }
-                    }}
-                    className={`h-7 px-2.5 rounded-md text-[11px] font-bold flex items-center justify-center gap-1 cursor-pointer transition-all border shrink-0 ${
-                      isWordActive
-                        ? "bg-amber-500 text-black border-amber-400 shadow-sm"
-                        : "bg-slate-900/90 text-slate-300 border-slate-800 hover:border-slate-700"
-                    }`}
-                    title={`Jump to ${item.start.toFixed(2)}s`}
-                  >
-                    <span>{item.word}</span>
-                    {isWordActive && enableEmojis && <span>🔥</span>}
-                  </div>
-                );
-              })}
+              {/* Reel Volume / Sound Control */}
+              <div className="flex items-center gap-1.5 bg-slate-950 px-2.5 py-1 rounded-lg border border-slate-800 shrink-0">
+                <button
+                  onClick={toggleMute}
+                  className="text-slate-400 hover:text-white transition-colors cursor-pointer"
+                  title={isMuted ? "Unmute reel audio" : "Mute reel audio"}
+                >
+                  {isMuted || videoVolume === 0 ? (
+                    <VolumeX className="h-4 w-4 text-red-400" />
+                  ) : videoVolume < 0.5 ? (
+                    <Volume1 className="h-4 w-4 text-amber-400" />
+                  ) : (
+                    <Volume2 className="h-4 w-4 text-amber-400" />
+                  )}
+                </button>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={isMuted ? 0 : videoVolume}
+                  onChange={(e) => handleVolumeChange(parseFloat(e.target.value))}
+                  className="w-16 accent-amber-500 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
+                  title={`Reel Volume: ${Math.round((isMuted ? 0 : videoVolume) * 100)}%`}
+                />
+                <span className="font-mono text-[10px] text-slate-400 w-7 text-right">
+                  {Math.round((isMuted ? 0 : videoVolume) * 100)}%
+                </span>
+              </div>
+
+              {/* Timecode */}
+              <span className="font-mono text-[11px] text-amber-400 font-bold shrink-0">
+                00:{currentTime < 10 ? "0" : ""}{currentTime.toFixed(1)} / 00:{duration < 10 ? "0" : ""}{duration.toFixed(1)}
+              </span>
+
+              {/* Word Track Pills */}
+              <div className="flex-1 flex items-center gap-1.5 overflow-x-auto py-1 custom-scrollbar">
+                {wordsList.map((item, idx) => {
+                  const isWordActive = currentTime >= item.start && currentTime <= (item.end + 0.15);
+                  return (
+                    <div
+                      key={idx}
+                      onClick={() => {
+                        if (videoRef.current) {
+                          videoRef.current.currentTime = item.start;
+                          setCurrentTime(item.start);
+                        }
+                      }}
+                      className={`h-7 px-2.5 rounded-md text-[11px] font-bold flex items-center justify-center gap-1 cursor-pointer transition-all border shrink-0 ${
+                        isWordActive
+                          ? "bg-amber-500 text-black border-amber-400 shadow-sm"
+                          : "bg-slate-900/90 text-slate-300 border-slate-800 hover:border-slate-700"
+                      }`}
+                      title={`Jump to ${item.start.toFixed(2)}s`}
+                    >
+                      <span>{item.word}</span>
+                      {isWordActive && enableEmojis && <span>🔥</span>}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           </div>
         </div>
