@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { Toaster } from "sonner";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -184,7 +185,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLdSchema) }}
         />
       </head>
-      <body className="min-h-full flex flex-col bg-[#090D16] text-slate-100">{children}</body>
+      <body className="min-h-full flex flex-col bg-[#090D16] text-slate-100">
+        <Toaster richColors position="top-right" theme="dark" closeButton />
+        {children}
+      </body>
     </html>
   );
 }
