@@ -1,0 +1,44 @@
+name: Sync Backend to Hugging Face Space
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+  workflow_dispatch:
+
+jobs:
+  sync-to-hf:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Monorepo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Sync Backend Directory to Hugging Face Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          git config --global user.name "FlowCreator-Bot"
+          git config --global user.email "bot@flowcreator.os"
+
+          # Clone existing Hugging Face Space
+          git clone https://01talha:$HF_TOKEN@huggingface.co/spaces/01talha/arqa-chatbot hf_space
+
+          # Clear current space contents (preserve .git)
+          find hf_space -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
+
+          # Copy backend files into HF Space root
+          cp -r backend/* hf_space/
+          [ -f backend/.dockerignore ] && cp backend/.dockerignore hf_space/ || true
+          [ -f backend/.gitattributes ] && cp backend/.gitattributes hf_space/ || true
+
+          cd hf_space
+          git add -A
+          if git diff-index --quiet HEAD --; then
+            echo "No changes to sync to Hugging Face Space."
+          else
+            git commit -m "Auto-sync backend from FlowCreator OS main: ${{ github.sha }}"
+            git push origin main
+          fi
