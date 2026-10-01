@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from caption_engine import (
     STYLE_PRESETS,
     AVAILABLE_FONTS,
+    BGM_PRESET_LIBRARY,
     get_video_dimensions,
     get_video_duration,
     resolve_font_info,
@@ -128,6 +129,13 @@ def get_presets():
         "resolutions": ["1080p Full HD", "4K Ultra HD"]
     }
 
+@app.get("/api/music/library")
+def get_music_library():
+    return {
+        "status": "success",
+        "tracks": BGM_PRESET_LIBRARY
+    }
+
 @app.post("/api/transcribe")
 async def transcribe_video(
     file: UploadFile = File(...),
@@ -217,7 +225,12 @@ async def render_reel(
     sfx_style: str = Form("Dynamic Auto"),
     sfx_volume: float = Form(0.6),
     groq_api_key: Optional[str] = Form(None),
-    language: str = Form("Auto-detect")
+    language: str = Form("Auto-detect"),
+    bg_music_id: Optional[str] = Form(None),
+    bg_music_volume: float = Form(0.20),
+    enable_auto_ducking: bool = Form(True),
+    custom_bg_music: Optional[UploadFile] = File(None),
+    bg_music_start_offset: float = Form(0.0)
 ):
     ffmpeg_bin = resolve_ffmpeg_path()
     file_id = str(uuid.uuid4())[:8]
@@ -236,6 +249,12 @@ async def render_reel(
         custom_font_path = str(OUTPUTS_DIR / f"font_{file_id}_{custom_font.filename}")
         with open(custom_font_path, "wb") as f_buffer:
             shutil.copyfileobj(custom_font.file, f_buffer)
+
+    custom_bgm_path = None
+    if custom_bg_music:
+        custom_bgm_path = str(OUTPUTS_DIR / f"bgm_{file_id}_{custom_bg_music.filename}")
+        with open(custom_bgm_path, "wb") as bgm_buf:
+            shutil.copyfileobj(custom_bg_music.file, bgm_buf)
 
     try:
         active_video = str(input_video_path)
@@ -303,7 +322,19 @@ async def render_reel(
                 volume=float(sfx_volume)
             )
 
-        # 6. Burn
+        # 6. Resolve Background Music Track
+        resolved_bgm_path = None
+        if custom_bgm_path and Path(custom_bgm_path).exists():
+            resolved_bgm_path = custom_bgm_path
+        elif bg_music_id and bg_music_id not in ["none", ""]:
+            for track in BGM_PRESET_LIBRARY:
+                if track["id"] == bg_music_id:
+                    possible_path = BASE_DIR / "assets" / "bgm" / track["file"]
+                    if possible_path.exists():
+                        resolved_bgm_path = str(possible_path)
+                    break
+
+        # 7. Burn Subtitles, SFX, and Background Music with Auto-Ducking
         burn_subtitles_into_video(
             video_path=active_video,
             ass_path=str(temp_ass_path),
@@ -311,7 +342,11 @@ async def render_reel(
             ffmpeg_path=ffmpeg_bin,
             is_4k=is_4k,
             sfx_audio_path=sfx_audio,
-            fonts_dir=fonts_dir
+            fonts_dir=fonts_dir,
+            bg_music_path=resolved_bgm_path,
+            bg_music_volume=float(bg_music_volume),
+            enable_auto_ducking=bool(enable_auto_ducking),
+            bg_music_start_offset=float(bg_music_start_offset)
         )
 
         return FileResponse(

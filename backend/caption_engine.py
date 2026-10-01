@@ -637,6 +637,202 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     with open(output_ass_path, "w", encoding="utf-8") as f:
         f.write(content)
 
+BGM_PRESET_LIBRARY = [
+    {
+        "id": "bansuri_sad",
+        "title": "Bansuri & Rain Drops (Arijit / Sad Vibe)",
+        "category": "Sad & Shayari 💔",
+        "file": "bansuri_sad.wav",
+        "icon": "🪈",
+        "desc": "Deep Indian bamboo flute, soulful Raag Shivranjani, slow cello strings"
+    },
+    {
+        "id": "sufi_sarangi",
+        "title": "Sufi Sarangi & Dholak Pulse",
+        "category": "Sad & Shayari 💔",
+        "file": "sufi_sarangi.wav",
+        "icon": "🎻",
+        "desc": "Classical bowed sarangi, tanpura ambient drone, Jaun Elia poetry style"
+    },
+    {
+        "id": "snowfall_ambient",
+        "title": "Snowfall Ambient (Øneheart Aesthetic)",
+        "category": "English Sad & Deep 🌧️",
+        "file": "snowfall_ambient.wav",
+        "icon": "❄️",
+        "desc": "Dreamy slow piano pad, warm sub drone, viral lonely night reel aesthetic"
+    },
+    {
+        "id": "experience_piano",
+        "title": "Experience Piano & Strings (Einaudi Style)",
+        "category": "English Sad & Deep 🌧️",
+        "file": "experience_piano.wav",
+        "icon": "🎹",
+        "desc": "Emotional arpeggiated piano building into cinematic violin swells"
+    },
+    {
+        "id": "interstellar_deep",
+        "title": "Interstellar Cosmic Deep (Zimmer Style)",
+        "category": "Podcast & Thinking 🎙️",
+        "file": "interstellar_deep.wav",
+        "icon": "🌌",
+        "desc": "Cathedral organ chords and slow cosmic pulse for mind-expanding reels"
+    },
+    {
+        "id": "podcast_drone",
+        "title": "Lex & Huberman Minimal Focus Drone",
+        "category": "Podcast & Thinking 🎙️",
+        "file": "podcast_drone.wav",
+        "icon": "🎙️",
+        "desc": "Subtle 55Hz sub-bass and warm organic air for interview speech clarity"
+    },
+    {
+        "id": "lofi_chill",
+        "title": "Ali Abdaal Coffeehouse Lofi",
+        "category": "Lofi & Aesthetic ✨",
+        "file": "lofi_chill.wav",
+        "icon": "☕",
+        "desc": "Vintage vinyl crackle, warm Rhodes piano, gentle relaxed study beat"
+    },
+    {
+        "id": "phonk_gym",
+        "title": "Brazilian Drift Phonk (Gym / 808)",
+        "category": "Phonk & High Energy 🔥",
+        "file": "phonk_gym.wav",
+        "icon": "⚡",
+        "desc": "Aggressive 808 sub-bass slides, cowbell cadence, high-retention energy"
+    }
+]
+
+def ensure_bgm_library_exists():
+    """
+    Checks if BGM preset files exist in backend/assets/bgm.
+    If missing, synthesizes high-fidelity ambient harmonic audio files procedurally.
+    Avoids committing large binary .wav files to Git while ensuring full functionality.
+    """
+    bgm_dir = BASE_DIR / "assets" / "bgm"
+    bgm_dir.mkdir(parents=True, exist_ok=True)
+    
+    missing = [t for t in BGM_PRESET_LIBRARY if not (bgm_dir / t["file"]).exists()]
+    if not missing:
+        return
+        
+    try:
+        import numpy as np
+        import wave
+        
+        sample_rate = 44100
+        duration = 18.0
+        t = np.linspace(0, duration, int(sample_rate * duration), False)
+        
+        def save_wav(path, data):
+            data = data / (np.max(np.abs(data)) + 1e-6) * 0.88
+            fade_len = int(sample_rate * 0.8)
+            fade_in = np.linspace(0, 1, fade_len)
+            fade_out = np.linspace(1, 0, fade_len)
+            data[:fade_len] *= fade_in
+            data[-fade_len:] *= fade_out
+            int_data = (data * 32767).astype(np.int16)
+            with wave.open(str(path), 'w') as f:
+                f.setnchannels(1)
+                f.setsampwidth(2)
+                f.setframerate(sample_rate)
+                f.writeframes(int_data.tobytes())
+
+        # 1. Bansuri Sad
+        flute_notes = [440, 493.88, 523.25, 659.25, 523.25, 493.88, 440, 392]
+        sig_bansuri = np.zeros_like(t)
+        note_dur = duration / len(flute_notes)
+        for i, freq in enumerate(flute_notes):
+            start_idx = int(i * note_dur * sample_rate)
+            end_idx = int((i + 1) * note_dur * sample_rate)
+            sub_t = t[start_idx:end_idx]
+            vibrato = 1.0 + 0.02 * np.sin(2 * np.pi * 5.2 * sub_t)
+            envelope = np.sin(np.pi * (sub_t - sub_t[0]) / (sub_t[-1] - sub_t[0])) ** 1.5
+            flute = np.sin(2 * np.pi * freq * vibrato * sub_t) + 0.35 * np.sin(4 * np.pi * freq * sub_t)
+            breath = 0.08 * np.random.normal(0, 1, len(sub_t))
+            sig_bansuri[start_idx:end_idx] = (flute + breath) * envelope
+        drone = 0.4 * np.sin(2 * np.pi * 110 * t) + 0.2 * np.sin(2 * np.pi * 164.81 * t)
+        save_wav(bgm_dir / 'bansuri_sad.wav', sig_bansuri + drone)
+
+        # 2. Snowfall Ambient
+        sig_snowfall = np.zeros_like(t)
+        chords = [[220, 261.63, 329.63, 392], [174.61, 220, 261.63, 329.63], [196, 246.94, 293.66, 392], [164.81, 196, 246.94, 293.66]]
+        c_dur = duration / len(chords)
+        for i, chord in enumerate(chords):
+            s = int(i * c_dur * sample_rate)
+            e = int((i + 1) * c_dur * sample_rate)
+            st = t[s:e]
+            env = np.sin(np.pi * (st - st[0]) / (st[-1] - st[0])) ** 1.2
+            c_sig = sum(np.sin(2 * np.pi * (f + 0.3 * np.sin(0.8 * st)) * st) for f in chord)
+            sig_snowfall[s:e] = c_sig * env
+        sub = 0.45 * np.sin(2 * np.pi * 55 * t) + 0.25 * np.sin(2 * np.pi * 82.41 * t)
+        save_wav(bgm_dir / 'snowfall_ambient.wav', sig_snowfall + sub)
+
+        # 3. Experience Piano & Violins
+        sig_einaudi = np.zeros_like(t)
+        arp_freqs = [220, 277.18, 329.63, 440, 329.63, 277.18, 220, 164.81] * int(duration // 2 + 1)
+        arp_dur = 0.25
+        for i, f in enumerate(arp_freqs):
+            s = int(i * arp_dur * sample_rate)
+            e = min(len(t), int((i + 1.2) * arp_dur * sample_rate))
+            if s >= len(t): break
+            st = t[s:e]
+            env = np.exp(-4.5 * (st - st[0]) / arp_dur)
+            piano = np.sin(2 * np.pi * f * st) + 0.3 * np.sin(4 * np.pi * f * st)
+            sig_einaudi[s:e] += piano * env * 0.7
+        violin_pad = 0.35 * (np.sin(2 * np.pi * 440 * t) + np.sin(2 * np.pi * 554.37 * t) + np.sin(2 * np.pi * 659.25 * t)) * (0.5 + 0.5 * np.sin(2 * np.pi * 0.15 * t))
+        save_wav(bgm_dir / 'experience_piano.wav', sig_einaudi + violin_pad)
+
+        # 4. Interstellar Cosmic Deep
+        organ = sum(np.sin(2 * np.pi * f * t) for f in [65.41, 130.81, 196.00, 261.63, 329.63])
+        cosmic_pulse = 0.3 * np.sin(2 * np.pi * 4.0 * t) * np.sin(2 * np.pi * 523.25 * t)
+        save_wav(bgm_dir / 'interstellar_deep.wav', organ * 0.4 + cosmic_pulse)
+
+        # 5. Sufi Sarangi & Dholak Pulse
+        sarangi = np.zeros_like(t)
+        s_notes = [293.66, 329.63, 349.23, 440, 392, 349.23, 329.63, 293.66]
+        s_dur = duration / len(s_notes)
+        for i, freq in enumerate(s_notes):
+            s = int(i * s_dur * sample_rate)
+            e = int((i + 1) * s_dur * sample_rate)
+            st = t[s:e]
+            vibrato = 1.0 + 0.03 * np.sin(2 * np.pi * 6.0 * st)
+            env = np.sin(np.pi * (st - st[0]) / (st[-1] - st[0])) ** 1.5
+            bowed = np.sin(2 * np.pi * freq * vibrato * st) + 0.4 * np.sin(4 * np.pi * freq * st) + 0.2 * np.sin(6 * np.pi * freq * st)
+            sarangi[s:e] = bowed * env
+        tanpura = 0.35 * (np.sin(2 * np.pi * 146.83 * t) + np.sin(2 * np.pi * 220 * t))
+        save_wav(bgm_dir / 'sufi_sarangi.wav', sarangi + tanpura)
+
+        # 6. Lex & Huberman Podcast Drone
+        podcast_drone = 0.5 * np.sin(2 * np.pi * 55 * t) + 0.25 * np.sin(2 * np.pi * 110 * t) + 0.15 * np.sin(2 * np.pi * 220 * t)
+        warm_rhodes = 0.2 * sum(np.sin(2 * np.pi * f * t) for f in [261.63, 329.63, 392, 493.88]) * (0.6 + 0.4 * np.sin(2 * np.pi * 0.2 * t))
+        save_wav(bgm_dir / 'podcast_drone.wav', podcast_drone + warm_rhodes)
+
+        # 7. Ali Abdaal Coffeehouse Lofi
+        lofi_sig = np.zeros_like(t)
+        l_chords = [[146.83, 220, 261.63, 329.63], [164.81, 246.94, 293.66, 370], [130.81, 196, 246.94, 329.63]]
+        l_dur = duration / len(l_chords)
+        for i, chord in enumerate(l_chords):
+            s = int(i * l_dur * sample_rate)
+            e = int((i + 1) * l_dur * sample_rate)
+            st = t[s:e]
+            env = np.sin(np.pi * (st - st[0]) / (st[-1] - st[0])) ** 1.3
+            c = sum(np.sin(2 * np.pi * f * st) for f in chord)
+            lofi_sig[s:e] = c * env
+        vinyl = 0.04 * np.random.normal(0, 1, len(t))
+        save_wav(bgm_dir / 'lofi_chill.wav', lofi_sig + vinyl)
+
+        # 8. Brazilian Phonk Drift
+        bass_pulse = 0.6 * np.sin(2 * np.pi * 45 * t) * (np.sin(2 * np.pi * 2.0 * t) > 0)
+        cowbell = 0.3 * (np.sin(2 * np.pi * 587.33 * t) + 0.5 * np.sin(2 * np.pi * 880 * t)) * (np.sin(2 * np.pi * 4.0 * t) > 0.8)
+        save_wav(bgm_dir / 'phonk_gym.wav', bass_pulse + cowbell)
+    except Exception as e:
+        print(f"[BGM Synthesis Warning] Could not synthesize BGM tracks: {e}")
+
+# Ensure library files exist
+ensure_bgm_library_exists()
+
 def burn_subtitles_into_video(
     video_path: str,
     ass_path: str,
@@ -644,7 +840,11 @@ def burn_subtitles_into_video(
     ffmpeg_path: str = "ffmpeg",
     is_4k: bool = False,
     sfx_audio_path: str = None,
-    fonts_dir: str = None
+    fonts_dir: str = None,
+    bg_music_path: str = None,
+    bg_music_volume: float = 0.2,
+    enable_auto_ducking: bool = True,
+    bg_music_start_offset: float = 0.0
 ) -> bool:
     # Use relative path or properly escaped path to avoid Windows colon issues
     try:
@@ -665,14 +865,59 @@ def burn_subtitles_into_video(
         filter_str = sub_filter
         crf = "22"
 
+    cmd_inputs = ["-i", video_path]
+    current_input_idx = 1
+    sfx_idx = None
+    bgm_idx = None
+
     if sfx_audio_path and Path(sfx_audio_path).exists():
-        complex_filter = f"[0:v]{filter_str}[vout];[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0:weights=1.0 0.8[aout]"
+        cmd_inputs.extend(["-i", sfx_audio_path])
+        sfx_idx = current_input_idx
+        current_input_idx += 1
+
+    if bg_music_path and Path(bg_music_path).exists():
+        if bg_music_start_offset > 0:
+            cmd_inputs.extend(["-ss", f"{bg_music_start_offset:.2f}"])
+        cmd_inputs.extend(["-i", bg_music_path])
+        bgm_idx = current_input_idx
+        current_input_idx += 1
+
+    # Audio & Video Filtergraph Construction
+    filter_complex_parts = [f"[0:v]{filter_str}[vout]"]
+
+    if bgm_idx is not None:
+        # Loop background music continuously
+        bgm_prep = f"[{bgm_idx}:a]aloop=loop=-1:size=2e+09,volume={bg_music_volume:.2f}[bgm_raw]"
+        filter_complex_parts.append(bgm_prep)
+
+        if enable_auto_ducking:
+            # Auto-Ducking: When voice [0:a] is active, lower music by 4:1 ratio
+            duck_filter = "[bgm_raw][0:a]sidechaincompress=threshold=0.09:ratio=4.5:attack=120:release=750[bgm_ducked]"
+            filter_complex_parts.append(duck_filter)
+            music_feed = "[bgm_ducked]"
+        else:
+            music_feed = "[bgm_raw]"
+
+        if sfx_idx is not None:
+            # Mix 3 inputs: Voice + Ducked BGM + SFX
+            mix_filter = f"[0:a]{music_feed}[{sfx_idx}:a]amix=inputs=3:duration=first:dropout_transition=2:weights=1.0 1.0 0.8[aout]"
+        else:
+            # Mix 2 inputs: Voice + Ducked BGM
+            mix_filter = f"[0:a]{music_feed}amix=inputs=2:duration=first:dropout_transition=2:weights=1.0 1.0[aout]"
+        filter_complex_parts.append(mix_filter)
+
+    elif sfx_idx is not None:
+        mix_filter = f"[0:a][{sfx_idx}:a]amix=inputs=2:duration=first:dropout_transition=0:weights=1.0 0.8[aout]"
+        filter_complex_parts.append(mix_filter)
+
+    has_audio_filter = (bgm_idx is not None or sfx_idx is not None)
+
+    if has_audio_filter:
         cmd = [
             ffmpeg_path,
             "-y",
-            "-i", video_path,
-            "-i", sfx_audio_path,
-            "-filter_complex", complex_filter,
+            *cmd_inputs,
+            "-filter_complex", ";".join(filter_complex_parts),
             "-map", "[vout]",
             "-map", "[aout]",
             "-c:v", "libx264",

@@ -104,6 +104,82 @@ const STYLE_PRESETS: Record<string, { label: string; badge: string; text: string
   }
 };
 
+interface BgmTrack {
+  id: string;
+  title: string;
+  category: string;
+  file: string;
+  icon: string;
+  desc: string;
+}
+
+const BGM_TRACKS: BgmTrack[] = [
+  {
+    id: "bansuri_sad",
+    title: "Bansuri & Rain Drops (Arijit / Sad Vibe)",
+    category: "Sad & Shayari 💔",
+    file: "/audio/bgm/bansuri_sad.wav",
+    icon: "🪈",
+    desc: "Indian bamboo flute, Raag Shivranjani, slow cello strings"
+  },
+  {
+    id: "sufi_sarangi",
+    title: "Sufi Sarangi & Dholak Pulse",
+    category: "Sad & Shayari 💔",
+    file: "/audio/bgm/sufi_sarangi.wav",
+    icon: "🎻",
+    desc: "Classical sarangi & tanpura drone, Jaun Elia poetry style"
+  },
+  {
+    id: "snowfall_ambient",
+    title: "Snowfall Ambient (Øneheart Aesthetic)",
+    category: "English Sad 🌧️",
+    file: "/audio/bgm/snowfall_ambient.wav",
+    icon: "❄️",
+    desc: "Dreamy slow piano pad, sub drone, viral aesthetic sad POV"
+  },
+  {
+    id: "experience_piano",
+    title: "Experience Piano (Ludovico Einaudi Style)",
+    category: "English Sad 🌧️",
+    file: "/audio/bgm/experience_piano.wav",
+    icon: "🎹",
+    desc: "Emotional arpeggiated piano with soaring violin swells"
+  },
+  {
+    id: "interstellar_deep",
+    title: "Interstellar Cosmic Deep (Zimmer Style)",
+    category: "Podcast 🎙️",
+    file: "/audio/bgm/interstellar_deep.wav",
+    icon: "🌌",
+    desc: "Cathedral organ chords & cosmic pulse for deep thoughts"
+  },
+  {
+    id: "podcast_drone",
+    title: "Lex & Huberman Minimal Focus Drone",
+    category: "Podcast 🎙️",
+    file: "/audio/bgm/podcast_drone.wav",
+    icon: "🎙️",
+    desc: "Subtle sub-bass and warm organic air for speech clarity"
+  },
+  {
+    id: "lofi_chill",
+    title: "Ali Abdaal Coffeehouse Lofi",
+    category: "Lofi ✨",
+    file: "/audio/bgm/lofi_chill.wav",
+    icon: "☕",
+    desc: "Warm vinyl crackle, gentle Rhodes piano, study beat"
+  },
+  {
+    id: "phonk_gym",
+    title: "Brazilian Drift Phonk (Gym / 808)",
+    category: "Phonk 🔥",
+    file: "/audio/bgm/phonk_gym.wav",
+    icon: "⚡",
+    desc: "Aggressive 808 sub-bass, cowbell cadence, adrenaline"
+  }
+];
+
 const EMOJI_KEYWORDS: Record<string, string> = {
   MONEY: "💰", CASH: "💵", RICH: "🤑", PROFIT: "📈", DOLLAR: "💵", WEALTH: "💎",
   FIRE: "🔥", VIRAL: "🚀", ROCKET: "🚀", FAST: "⚡", SPEED: "🏎️", BOOM: "💥",
@@ -167,6 +243,16 @@ export default function StudioPage() {
   const [sfxVolume, setSfxVolume] = useState<number>(0.6);
   const [exportRes, setExportRes] = useState<string>("1080p");
   const [groqKey, setGroqKey] = useState<string>("");
+
+  // Background Music States
+  const [selectedBgmId, setSelectedBgmId] = useState<string>("none");
+  const [bgmCategory, setBgmCategory] = useState<string>("All");
+  const [bgmVolume, setBgmVolume] = useState<number>(0.20);
+  const [enableAutoDucking, setEnableAutoDucking] = useState<boolean>(true);
+  const [bgmStartOffset, setBgmStartOffset] = useState<number>(0.0);
+  const [customBgmFile, setCustomBgmFile] = useState<File | null>(null);
+  const [previewingAudioTrackId, setPreviewingAudioTrackId] = useState<string | null>(null);
+  const bgmAudioPlayerRef = useRef<HTMLAudioElement | null>(null);
 
   // Viewport & Scale States
   const [videoDimensions, setVideoDimensions] = useState<{ width: number; height: number }>({ width: 1080, height: 1920 });
@@ -244,6 +330,33 @@ export default function StudioPage() {
       const vh = videoRef.current.videoHeight || 1920;
       setVideoDimensions({ width: vw, height: vh });
       setDuration(videoRef.current.duration || 15);
+    }
+  };
+
+  // Toggle audio preview of a BGM track
+  const handleToggleBgmAudioPreview = (track: BgmTrack) => {
+    if (previewingAudioTrackId === track.id) {
+      if (bgmAudioPlayerRef.current) {
+        bgmAudioPlayerRef.current.pause();
+      }
+      setPreviewingAudioTrackId(null);
+    } else {
+      if (bgmAudioPlayerRef.current) {
+        bgmAudioPlayerRef.current.src = track.file;
+        bgmAudioPlayerRef.current.volume = bgmVolume;
+        bgmAudioPlayerRef.current.play().catch(() => {});
+      }
+      setPreviewingAudioTrackId(track.id);
+    }
+  };
+
+  const handleCustomBgmUpload = (file: File) => {
+    if (!file) return;
+    setCustomBgmFile(file);
+    setSelectedBgmId("custom");
+    if (bgmAudioPlayerRef.current) {
+      bgmAudioPlayerRef.current.src = URL.createObjectURL(file);
+      bgmAudioPlayerRef.current.volume = bgmVolume;
     }
   };
 
@@ -378,8 +491,19 @@ export default function StudioPage() {
     formData.append("remove_silence", removeSilence ? "true" : "false");
     formData.append("enable_sfx", enableSfx ? "true" : "false");
     formData.append("sfx_style", sfxStyle);
-    formData.append("sfx_volume", sfxVolume.toString());
     if (customFontFile) formData.append("custom_font", customFontFile);
+    if (selectedBgmId && selectedBgmId !== "none" && selectedBgmId !== "custom") {
+      formData.append("bg_music_id", selectedBgmId);
+      formData.append("bg_music_volume", bgmVolume.toString());
+      formData.append("enable_auto_ducking", enableAutoDucking ? "true" : "false");
+      formData.append("bg_music_start_offset", bgmStartOffset.toString());
+    }
+    if (customBgmFile) {
+      formData.append("custom_bg_music", customBgmFile);
+      formData.append("bg_music_volume", bgmVolume.toString());
+      formData.append("enable_auto_ducking", enableAutoDucking ? "true" : "false");
+      formData.append("bg_music_start_offset", bgmStartOffset.toString());
+    }
     if (groqKey) formData.append("groq_api_key", groqKey);
     if (editableTranscript) formData.append("words_json", editableTranscript);
 
@@ -760,54 +884,282 @@ export default function StudioPage() {
               </div>
             )}
 
-            {/* TAB 4: SOUND EFFECTS */}
+            {/* TAB 4: BGM & AUDIO EFFECTS */}
             {leftNav === "audio" && (
-              <div className="space-y-3">
-                <label className="flex items-center justify-between p-2.5 rounded-lg bg-slate-950 border border-slate-800 cursor-pointer hover:border-slate-700">
-                  <div>
-                    <span className="text-xs font-bold text-white block">Viral Audio FX</span>
-                    <span className="text-[10px] text-slate-400">Plays Pop &amp; Ding on highlights</span>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={enableSfx}
-                    onChange={(e) => setEnableSfx(e.target.checked)}
-                    className="accent-amber-500 h-4 w-4"
-                  />
-                </label>
-
-                {enableSfx && (
-                  <div className="space-y-2.5 pt-1">
-                    <div>
-                      <span className="text-[10px] text-slate-400 block mb-1">Sound Style</span>
-                      <select
-                        value={sfxStyle}
-                        onChange={(e) => setSfxStyle(e.target.value)}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-xs text-white"
+              <div className="space-y-4">
+                {/* 1. Background Music Library */}
+                <div className="space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+                      <Music className="h-3 w-3 text-amber-400" />
+                      <span>Background Music (BGM)</span>
+                    </span>
+                    {selectedBgmId !== "none" && (
+                      <button
+                        onClick={() => {
+                          setSelectedBgmId("none");
+                          setCustomBgmFile(null);
+                          if (bgmAudioPlayerRef.current) bgmAudioPlayerRef.current.pause();
+                        }}
+                        className="text-[9px] text-red-400 hover:underline cursor-pointer"
                       >
-                        <option value="Dynamic Auto">Dynamic (Pop &amp; Cash Bell)</option>
-                        <option value="Pop Only">Pop Only</option>
-                        <option value="Ding / Bell Only">Bell Ding Only</option>
-                      </select>
+                        Mute Music
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Category Filter Pills */}
+                  <div className="flex flex-wrap gap-1">
+                    {["All", "Sad & Shayari 💔", "English Sad 🌧️", "Podcast 🎙️", "Lofi ✨", "Phonk 🔥"].map((cat) => (
+                      <button
+                        key={cat}
+                        onClick={() => setBgmCategory(cat)}
+                        className={`text-[9px] px-2 py-0.5 rounded-full border transition-all ${
+                          bgmCategory === cat
+                            ? "bg-amber-500/20 border-amber-500/60 text-amber-300 font-bold"
+                            : "bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200"
+                        }`}
+                      >
+                        {cat}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Track Cards Scrollable List */}
+                  <div className="space-y-1.5 max-h-56 overflow-y-auto custom-scrollbar pr-0.5">
+                    {/* None Option */}
+                    <div
+                      onClick={() => {
+                        setSelectedBgmId("none");
+                        setCustomBgmFile(null);
+                        if (bgmAudioPlayerRef.current) bgmAudioPlayerRef.current.pause();
+                      }}
+                      className={`p-2 rounded-lg border flex items-center justify-between cursor-pointer transition-all ${
+                        selectedBgmId === "none"
+                          ? "bg-amber-500/10 border-amber-500 text-white font-bold"
+                          : "bg-slate-950/60 border-slate-800 text-slate-400 hover:border-slate-700"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs">🚫</span>
+                        <span className="text-[11px]">No Background Music (Voice Only)</span>
+                      </div>
+                      {selectedBgmId === "none" && <Check className="h-3 w-3 text-amber-400" />}
                     </div>
 
+                    {/* Filtered Curated BGM Tracks */}
+                    {(bgmCategory === "All" ? BGM_TRACKS : BGM_TRACKS.filter((t) => t.category === bgmCategory)).map((track) => {
+                      const isSelected = selectedBgmId === track.id;
+                      const isPlayingThis = previewingAudioTrackId === track.id;
+
+                      return (
+                        <div
+                          key={track.id}
+                          className={`p-2 rounded-lg border flex items-center justify-between transition-all ${
+                            isSelected
+                              ? "bg-amber-500/15 border-amber-500 text-white shadow-sm"
+                              : "bg-slate-950/70 border-slate-800/80 text-slate-300 hover:border-slate-700"
+                          }`}
+                        >
+                          <div
+                            className="flex items-center gap-2 flex-1 cursor-pointer truncate mr-2"
+                            onClick={() => {
+                              setSelectedBgmId(track.id);
+                              setCustomBgmFile(null);
+                            }}
+                          >
+                            <span className="text-base shrink-0">{track.icon}</span>
+                            <div className="truncate">
+                              <span className="text-[11px] font-bold block truncate">{track.title}</span>
+                              <span className="text-[9px] text-slate-500 block truncate">{track.desc}</span>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            {/* Preview Play/Pause Button */}
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleToggleBgmAudioPreview(track);
+                              }}
+                              className={`h-6 w-6 rounded-full flex items-center justify-center transition-all ${
+                                isPlayingThis
+                                  ? "bg-amber-500 text-black shadow-md shadow-amber-500/30"
+                                  : "bg-slate-800 hover:bg-slate-700 text-slate-300"
+                              }`}
+                              title={isPlayingThis ? "Pause Preview" : "Preview Audio Track"}
+                            >
+                              {isPlayingThis ? <Pause className="h-3 w-3" /> : <Play className="h-3 w-3 ml-0.5" />}
+                            </button>
+
+                            {/* Select Indicator */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedBgmId(track.id);
+                                setCustomBgmFile(null);
+                              }}
+                              className={`h-6 px-2 rounded text-[10px] font-bold transition-all ${
+                                isSelected
+                                  ? "bg-amber-500 text-black"
+                                  : "bg-slate-900 border border-slate-800 text-slate-400 hover:text-white"
+                              }`}
+                            >
+                              {isSelected ? "Selected" : "Select"}
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Custom Song Upload Dropzone */}
+                  <div className="pt-1">
+                    <label className="flex items-center justify-between p-2 rounded-lg bg-slate-950 border border-dashed border-slate-800 hover:border-amber-500/50 cursor-pointer transition-all">
+                      <div className="flex items-center gap-2">
+                        <Music className="h-3.5 w-3.5 text-amber-400" />
+                        <div>
+                          <span className="text-[11px] font-semibold text-slate-300 block">
+                            {customBgmFile ? customBgmFile.name : "Upload Your Own Track (.mp3 / .wav)"}
+                          </span>
+                          <span className="text-[9px] text-slate-500">Bollywood, Urdu Shayari, or viral sounds</span>
+                        </div>
+                      </div>
+                      <input
+                        type="file"
+                        accept="audio/*"
+                        className="hidden"
+                        onChange={(e) => {
+                          if (e.target.files && e.target.files[0]) {
+                            handleCustomBgmUpload(e.target.files[0]);
+                          }
+                        }}
+                      />
+                    </label>
+                  </div>
+                </div>
+
+                {/* 2. Mixing Controls (When BGM selected) */}
+                {selectedBgmId !== "none" && (
+                  <div className="p-3 rounded-xl bg-slate-950/80 border border-slate-800 space-y-3">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-amber-400 block">
+                      🎛️ Audio Mixing &amp; Auto-Ducking
+                    </span>
+
+                    {/* BGM Volume Slider */}
                     <div>
                       <div className="flex justify-between text-[11px] mb-1">
-                        <span className="text-slate-400">Volume</span>
-                        <span className="text-amber-400 font-mono">{Math.round(sfxVolume * 100)}%</span>
+                        <span className="text-slate-400">Music Volume</span>
+                        <span className="text-amber-400 font-mono font-bold">{Math.round(bgmVolume * 100)}%</span>
                       </div>
                       <input
                         type="range"
-                        min={0.1}
-                        max={1.0}
-                        step={0.05}
-                        value={sfxVolume}
-                        onChange={(e) => setSfxVolume(parseFloat(e.target.value))}
+                        min={0.05}
+                        max={0.8}
+                        step={0.02}
+                        value={bgmVolume}
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value);
+                          setBgmVolume(val);
+                          if (bgmAudioPlayerRef.current) bgmAudioPlayerRef.current.volume = val;
+                        }}
                         className="w-full accent-amber-500 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
                       />
+                      <div className="flex justify-between text-[9px] text-slate-500 mt-0.5">
+                        <span>Subtle (10%)</span>
+                        <span className="text-amber-400 font-semibold">Recommended (20%)</span>
+                        <span>Prominent (50%)</span>
+                      </div>
+                    </div>
+
+                    {/* Smart Auto-Ducking Toggle */}
+                    <label className="flex items-center justify-between p-2 rounded-lg bg-slate-900 border border-slate-800/80 cursor-pointer hover:border-slate-700">
+                      <div className="pr-2">
+                        <span className="text-[11px] font-bold text-white flex items-center gap-1">
+                          <Zap className="h-3 w-3 text-amber-400" />
+                          <span>Smart Auto-Ducking (Sidechain)</span>
+                        </span>
+                        <span className="text-[9px] text-slate-400 block mt-0.5">
+                          Ducks music volume 4:1 whenever speech is detected
+                        </span>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={enableAutoDucking}
+                        onChange={(e) => setEnableAutoDucking(e.target.checked)}
+                        className="accent-amber-500 h-4 w-4 shrink-0"
+                      />
+                    </label>
+
+                    {/* Start Offset Scrubber */}
+                    <div>
+                      <div className="flex justify-between text-[10px] text-slate-400 mb-1">
+                        <span>Music Start Offset</span>
+                        <span className="font-mono text-amber-400">{bgmStartOffset.toFixed(1)}s</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={0}
+                        max={30}
+                        step={1}
+                        value={bgmStartOffset}
+                        onChange={(e) => setBgmStartOffset(parseFloat(e.target.value))}
+                        className="w-full accent-amber-500 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
+                      />
+                      <span className="text-[9px] text-slate-500 block">Skip intro to start music at beat drop</span>
                     </div>
                   </div>
                 )}
+
+                {/* 3. Viral SFX Section */}
+                <div className="pt-2 border-t border-slate-800/80">
+                  <label className="flex items-center justify-between p-2.5 rounded-lg bg-slate-950 border border-slate-800 cursor-pointer hover:border-slate-700 mb-2">
+                    <div>
+                      <span className="text-xs font-bold text-white block">Viral Sound Effects (SFX)</span>
+                      <span className="text-[10px] text-slate-400">Plays Pop &amp; Cash Bell on keywords</span>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={enableSfx}
+                      onChange={(e) => setEnableSfx(e.target.checked)}
+                      className="accent-amber-500 h-4 w-4"
+                    />
+                  </label>
+
+                  {enableSfx && (
+                    <div className="space-y-2.5 p-2 rounded-lg bg-slate-950/60 border border-slate-800">
+                      <div>
+                        <span className="text-[10px] text-slate-400 block mb-1">SFX Style</span>
+                        <select
+                          value={sfxStyle}
+                          onChange={(e) => setSfxStyle(e.target.value)}
+                          className="w-full bg-slate-900 border border-slate-800 rounded-lg p-1.5 text-xs text-white"
+                        >
+                          <option value="Dynamic Auto">Dynamic (Pop &amp; Cash Bell)</option>
+                          <option value="Pop Only">Pop Only</option>
+                          <option value="Ding / Bell Only">Bell Ding Only</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <div className="flex justify-between text-[10px] mb-1">
+                          <span className="text-slate-400">SFX Volume</span>
+                          <span className="text-amber-400 font-mono">{Math.round(sfxVolume * 100)}%</span>
+                        </div>
+                        <input
+                          type="range"
+                          min={0.1}
+                          max={1.0}
+                          step={0.05}
+                          value={sfxVolume}
+                          onChange={(e) => setSfxVolume(parseFloat(e.target.value))}
+                          className="w-full accent-amber-500 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 
@@ -1143,6 +1495,8 @@ export default function StudioPage() {
           </div>
         </div>
       </div>
+      {/* Hidden Audio Player for BGM Preview & Playback */}
+      <audio ref={bgmAudioPlayerRef} loop className="hidden" />
     </div>
   );
 }
