@@ -329,7 +329,7 @@ export default function StudioPage() {
       .catch(() => setApiOnline(false));
   }, [apiUrl]);
 
-  // Video Selection
+  // Video Selection (Only loads video, does NOT auto-transcribe)
   const handleVideoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
@@ -337,8 +337,8 @@ export default function StudioPage() {
       setVideoPreview(URL.createObjectURL(file));
       setExportedVideoUrl(null);
       setErrorMessage(null);
-      // Auto-trigger speech transcription on file pick!
-      handleTranscribeSpeech(file);
+      // Reset words so user can click Generate Captions button manually
+      setWordsList([]);
     }
   };
 
