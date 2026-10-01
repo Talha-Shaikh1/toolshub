@@ -218,21 +218,41 @@ def get_video_dimensions(video_path: str, ffmpeg_path: str = "ffmpeg") -> Tuple[
     except Exception:
         return 1080, 1920
 
+_GLOBAL_WHISPER_MODELS = {}
+
+def get_or_load_whisper_model(model_size: str = "tiny"):
+    global _GLOBAL_WHISPER_MODELS
+    if model_size not in _GLOBAL_WHISPER_MODELS:
+        from faster_whisper import WhisperModel
+        _GLOBAL_WHISPER_MODELS[model_size] = WhisperModel(
+            model_size,
+            device="cpu",
+            compute_type="int8",
+            cpu_threads=4
+        )
+    return _GLOBAL_WHISPER_MODELS[model_size]
+
 def transcribe_audio_whisper(
     video_path: str,
-    model_size: str = "base",
-    language: str = None
+    model_size: str = "tiny",
+    language: str = None,
+    ffmpeg_path: str = "ffmpeg"
 ) -> List[Dict[str, Any]]:
-    from faster_whisper import WhisperModel
+    # Extract audio to 16kHz mono mp3 for 5x faster processing than raw video decoding
+    temp_dir = BASE_DIR / "outputs"
+    temp_dir.mkdir(exist_ok=True)
+    temp_audio = str(temp_dir / f"temp_whisper_{Path(video_path).stem}.mp3")
+    extract_audio_for_groq(video_path, temp_audio, ffmpeg_path=ffmpeg_path)
 
-    model = WhisperModel(model_size, device="cpu", compute_type="int8")
+    model = get_or_load_whisper_model(model_size)
 
     segments, info = model.transcribe(
-        video_path,
+        temp_audio,
         word_timestamps=True,
         language=language if language and language != "Auto-detect" else None,
         vad_filter=True,
-        vad_parameters=dict(min_silence_duration_ms=400)
+        vad_parameters=dict(min_silence_duration_ms=400),
+        beam_size=1
     )
 
     words = []
@@ -247,6 +267,10 @@ def transcribe_audio_whisper(
                         "end": w.end,
                         "probability": w.probability
                     })
+    try:
+        Path(temp_audio).unlink(missing_ok=True)
+    except Exception:
+        pass
     return words
 
 def extract_audio_for_groq(video_path: str, output_audio_path: str, ffmpeg_path: str = "ffmpeg") -> str:

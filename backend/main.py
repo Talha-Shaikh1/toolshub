@@ -238,13 +238,14 @@ async def transcribe_video(
             )
             engine = "⚡ Groq Cloud (whisper-large-v3-turbo)"
         else:
-            actual_model = "base" if "base" in model else "small"
+            actual_model = "tiny"
             words = transcribe_audio_whisper(
                 video_path=str(temp_video),
                 model_size=actual_model,
-                language=language
+                language=language,
+                ffmpeg_path=ffmpeg_bin
             )
-            engine = f"💻 Local Whisper ({actual_model})"
+            engine = f"💻 Fast Local Whisper ({actual_model})"
 
         return {
             "status": "success",

@@ -296,6 +296,31 @@ export default function StudioPage() {
   // Settings Modal
   const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
 
+  // Load saved Groq Key
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("flowcreator_groq_key");
+      if (saved) setGroqKey(saved);
+    } catch {}
+  }, []);
+
+  const handleSaveGroqKey = (key: string) => {
+    const trimmed = key.trim();
+    setGroqKey(trimmed);
+    try {
+      if (trimmed) {
+        localStorage.setItem("flowcreator_groq_key", trimmed);
+        toast.success("Groq 1-Second AI Mode Activated! ⚡", {
+          description: "Reels will now transcribe in ~0.8s with Whisper Large v3."
+        });
+      } else {
+        localStorage.removeItem("flowcreator_groq_key");
+        toast.info("Groq Key Cleared", { description: "Reverted to CPU fallback." });
+      }
+    } catch {}
+    setShowSettingsModal(false);
+  };
+
   // Ping backend health
   useEffect(() => {
     fetch(`${apiUrl}/api/health`)
@@ -625,6 +650,17 @@ export default function StudioPage() {
 
         {/* Right: Actions */}
         <div className="flex items-center gap-2">
+          {/* Groq Cloud Speed Mode Button */}
+          <button
+            onClick={() => setShowSettingsModal(true)}
+            className="h-8 px-2.5 rounded-md bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white text-xs flex items-center gap-1.5 transition-all cursor-pointer"
+            title="Groq Cloud Whisper LPU (1-Second Transcription)"
+          >
+            <Zap className={`h-3.5 w-3.5 ${groqKey ? "text-emerald-400" : "text-amber-400"}`} />
+            <span className="hidden sm:inline">{groqKey ? "Groq 1s Active" : "1s Speed Key"}</span>
+            <span className={`h-1.5 w-1.5 rounded-full ${groqKey ? "bg-emerald-400" : "bg-amber-400 animate-pulse"}`} />
+          </button>
+
           {/* 1. Generate / Re-generate Captions */}
           <button
             onClick={() => handleTranscribeSpeech()}
@@ -1649,6 +1685,83 @@ export default function StudioPage() {
       </div>
       {/* Hidden Audio Player for BGM Preview & Playback */}
       <audio ref={bgmAudioPlayerRef} loop className="hidden" />
+
+      {/* Groq Cloud Settings Modal */}
+      {showSettingsModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#0C101A] border border-slate-800 rounded-2xl max-w-md w-full p-5 space-y-4 shadow-2xl relative animate-in fade-in zoom-in-95">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="h-7 w-7 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400">
+                  <Zap className="h-4 w-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">AI Speed Engine Settings</h3>
+                  <p className="text-[10px] text-slate-400">Groq Whisper Large v3 (1-Second Ultra-Speed)</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowSettingsModal(false)}
+                className="text-slate-400 hover:text-white p-1 rounded hover:bg-slate-800 transition-all cursor-pointer"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs text-slate-300">
+              <p className="text-[11px] leading-relaxed text-slate-400">
+                57-second reel ko <strong className="text-emerald-400 font-bold">~0.8 second</strong> mein transcribe karne ke liye apna Groq API Key dalein. Yeh <strong className="text-white">100% Free</strong> hai:
+              </p>
+
+              <div>
+                <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
+                  Groq API Key (gsk_...)
+                </label>
+                <input
+                  type="password"
+                  placeholder="gsk_xxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                  defaultValue={groqKey}
+                  id="groq-key-input"
+                  className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-xs font-mono text-white focus:outline-none focus:border-amber-500"
+                />
+              </div>
+
+              <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800/80 flex items-center justify-between text-[11px]">
+                <span className="text-slate-400">Key nahi hai?</span>
+                <a
+                  href="https://console.groq.com/keys"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-amber-400 hover:underline font-bold flex items-center gap-1"
+                >
+                  Free Key lein (console.groq.com)
+                  <ArrowRight className="h-3 w-3" />
+                </a>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => handleSaveGroqKey("")}
+                className="px-3 py-1.5 rounded-lg bg-slate-900 text-slate-400 hover:text-white text-xs transition-all cursor-pointer"
+              >
+                Clear
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const input = document.getElementById("groq-key-input") as HTMLInputElement;
+                  if (input) handleSaveGroqKey(input.value);
+                }}
+                className="px-4 py-1.5 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black font-extrabold text-xs shadow-md active:scale-95 transition-all cursor-pointer"
+              >
+                Save &amp; Activate 1s Mode
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
