@@ -4,6 +4,11 @@ import React, { useState, useEffect, useRef, useMemo } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import {
+  extractAudioBlob,
+  transcribeWithGroqDirect,
+  formatWordsToEditableText
+} from "@/lib/audioExtractor";
+import {
   Video,
   Sparkles,
   Volume2,
@@ -469,33 +474,107 @@ export default function StudioPage() {
     return { chunk, activeWordIndex };
   }, [wordsList, currentTime, wordsPerChunk]);
 
-  // Transcribe Speech for Review
+  // Transcribe Speech for Review (Ultra-Fast Direct Groq LPU + Lightweight In-Browser Audio Extraction)
   const handleTranscribeSpeech = async (overrideFile?: File | unknown) => {
     const fileToUse = (overrideFile instanceof File) ? overrideFile : videoFile;
     if (!fileToUse) {
       setErrorMessage("Please upload a video file first");
+      toast.error("No Video Found", { description: "Please upload or drop a video file first." });
       return;
     }
     setIsTranscribing(true);
     setErrorMessage(null);
 
-    const formData = new FormData();
-    formData.append("file", fileToUse);
-    formData.append("model", "base");
-    formData.append("language", "Auto-detect");
-    if (groqKey) formData.append("groq_api_key", groqKey);
+    const toastId = "transcribe-speech";
 
     try {
+      // 1. Direct Groq Cloud Mode (Ultra Fast: ~0.8s) if user provided Groq API Key
+      if (groqKey && groqKey.trim()) {
+        toast.loading("⚡ Extracting audio in browser...", {
+          id: toastId,
+          description: "Lightning-fast client-side audio decoding..."
+        });
+
+        let audioBlob: Blob;
+        try {
+          audioBlob = await extractAudioBlob(fileToUse);
+        } catch (e: any) {
+          console.warn("Client-side audio extraction fallback:", e);
+          audioBlob = fileToUse;
+        }
+
+        toast.loading("⚡ Transcribing with Groq LPU...", {
+          id: toastId,
+          description: "Whisper-large-v3-turbo processing in ~0.8s..."
+        });
+
+        try {
+          const groqResult = await transcribeWithGroqDirect(audioBlob, groqKey);
+          if (groqResult.words && groqResult.words.length > 0) {
+            setWordsList(groqResult.words);
+            setEditableTranscript(formatWordsToEditableText(groqResult.words));
+            toast.success("Groq 1-Sec AI Captions Ready! ⚡", {
+              id: toastId,
+              description: `${groqResult.words.length} words synchronized in under 1 second!`
+            });
+            setLeftNav("script");
+            return;
+          }
+        } catch (groqErr: any) {
+          console.warn("Direct Groq transcription failed, falling back to backend:", groqErr);
+          // If Groq gave an explicit API key authentication error, alert the user directly
+          const groqMsg = groqErr?.message || "";
+          if (groqMsg.includes("401") || groqMsg.toLowerCase().includes("invalid api key") || groqMsg.toLowerCase().includes("auth")) {
+            toast.error("Invalid Groq API Key", {
+              id: toastId,
+              description: "Please check your Groq API key in '⚡ 1s Speed Key' modal."
+            });
+            setErrorMessage("Invalid Groq API Key. Please verify your key in '⚡ 1s Speed Key'.");
+            return;
+          }
+          toast.loading("Groq direct call failed, trying backend server...", { id: toastId });
+        }
+      }
+
+      // 2. Fast Audio-Extraction + Backend Fallback
+      toast.loading("Extracting audio track...", {
+        id: toastId,
+        description: "Preparing lightweight audio payload (reduces upload from 80MB to 1MB)..."
+      });
+
+      let uploadPayload: Blob = fileToUse;
+      let uploadFilename = fileToUse.name;
+      try {
+        const audioBlob = await extractAudioBlob(fileToUse);
+        uploadPayload = audioBlob;
+        uploadFilename = `${fileToUse.name.replace(/\.[^/.]+$/, "")}_speech.wav`;
+      } catch (e) {
+        console.warn("Fallback to raw video upload:", e);
+      }
+
+      toast.loading("Transcribing on backend...", {
+        id: toastId,
+        description: "Analyzing speech & timestamps..."
+      });
+
+      const formData = new FormData();
+      formData.append("file", uploadPayload, uploadFilename);
+      formData.append("model", "base");
+      formData.append("language", "Auto-detect");
+      if (groqKey) formData.append("groq_api_key", groqKey);
+
       const res = await fetch(`${apiUrl}/api/transcribe`, {
         method: "POST",
         body: formData
       });
+
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       setEditableTranscript(data.editable_text || "");
       if (data.words && data.words.length > 0) {
         setWordsList(data.words);
         toast.success("AI Captions Generated! ✨", {
+          id: toastId,
           description: `${data.words.length} words synchronized with speech.`
         });
       }
@@ -508,6 +587,7 @@ export default function StudioPage() {
       }
       setErrorMessage(friendlyMsg);
       toast.error("Transcription Failed", {
+        id: toastId,
         description: friendlyMsg,
         duration: 5000
       });
