@@ -918,6 +918,45 @@ def ensure_bgm_library_exists():
 # Ensure library files exist
 ensure_bgm_library_exists()
 
+_DETECTED_ENCODER = None
+
+def detect_best_video_encoder(ffmpeg_path: str = "ffmpeg") -> Tuple[str, List[str]]:
+    """
+    Auto-detects the fastest GPU hardware encoder available on the system:
+    1. NVIDIA NVENC (h264_nvenc) - Ultra-fast on GeForce/RTX
+    2. Intel QuickSync QSV (h264_qsv) - Dedicated Intel hardware GPU
+    3. AMD AMF (h264_amf) - AMD Radeon GPU
+    4. Multi-core CPU fallback (libx264)
+    """
+    global _DETECTED_ENCODER
+    if _DETECTED_ENCODER is not None:
+        return _DETECTED_ENCODER
+
+    candidates = [
+        ("h264_nvenc", ["-preset", "p4"]),
+        ("h264_qsv", ["-preset", "veryfast"]),
+        ("h264_amf", ["-quality", "speed"]),
+        ("libx264", ["-preset", "fast"])
+    ]
+
+    for enc, extra in candidates:
+        try:
+            test_cmd = [
+                ffmpeg_path, "-hide_banner", "-loglevel", "error",
+                "-f", "lavfi", "-i", "color=c=black:s=64x64:d=0.05",
+                "-c:v", enc
+            ] + extra + ["-f", "null", "-"]
+            res = subprocess.run(test_cmd, capture_output=True, timeout=5)
+            if res.returncode == 0:
+                print(f"[Hardware GPU Engine] Auto-selected: {enc} ({extra})", flush=True)
+                _DETECTED_ENCODER = (enc, extra)
+                return _DETECTED_ENCODER
+        except Exception:
+            pass
+
+    _DETECTED_ENCODER = ("libx264", ["-preset", "fast"])
+    return _DETECTED_ENCODER
+
 def build_render_ffmpeg_cmd(
     video_path: str,
     ass_path: str,
@@ -1027,6 +1066,17 @@ def build_render_ffmpeg_cmd(
         filter_complex_parts.append(mix_filter)
 
     has_audio_filter = (bgm_idx is not None or sfx_idx is not None)
+    best_encoder, encoder_opts = detect_best_video_encoder(ffmpeg_path=ffmpeg_path)
+
+    v_encode_args = [
+        "-c:v", best_encoder,
+        *encoder_opts,
+        "-b:v", target_bitrate_str,
+        "-minrate", minrate_str,
+        "-maxrate", maxrate_str,
+        "-bufsize", bufsize_str,
+        "-pix_fmt", "yuv420p"
+    ]
 
     if has_audio_filter:
         cmd = [
@@ -1037,13 +1087,7 @@ def build_render_ffmpeg_cmd(
             "-filter_complex", ";".join(filter_complex_parts),
             "-map", "[vout]",
             "-map", "[aout]",
-            "-c:v", "libx264",
-            "-preset", "fast",
-            "-b:v", target_bitrate_str,
-            "-minrate", minrate_str,
-            "-maxrate", maxrate_str,
-            "-bufsize", bufsize_str,
-            "-pix_fmt", "yuv420p",
+            *v_encode_args,
             "-c:a", "aac",
             "-b:a", "320k",
             "-movflags", "+faststart",
@@ -1056,13 +1100,7 @@ def build_render_ffmpeg_cmd(
             "-threads", "0",
             "-i", video_path,
             "-vf", filter_str,
-            "-c:v", "libx264",
-            "-preset", "fast",
-            "-b:v", target_bitrate_str,
-            "-minrate", minrate_str,
-            "-maxrate", maxrate_str,
-            "-bufsize", bufsize_str,
-            "-pix_fmt", "yuv420p",
+            *v_encode_args,
             "-c:a", "copy",
             "-movflags", "+faststart",
             output_video_path

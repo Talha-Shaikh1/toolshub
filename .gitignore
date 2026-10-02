@@ -58,6 +58,7 @@ temp_*
 !frontend/public/**/*
 !backend/assets/**/*
 backend/assets/bgm/*.wav
+assets/bgm/*.wav
 !assets/**/*
 
 # Binaries & Large Tools
