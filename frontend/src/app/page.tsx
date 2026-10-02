@@ -883,22 +883,21 @@ export default function Home() {
                 </div>
                 <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
                   <a
-                    href="https://github.com/Talha-Shaikh1/toolshub/releases/download/v1.0.0-apk/FlowCreator-Studio.apk"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="flex-1 sm:flex-initial px-4 py-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black font-extrabold text-xs flex items-center justify-center gap-1.5 shadow-md active:scale-95 cursor-pointer"
+                    href="/downloads/FlowCreator-Studio.apk"
+                    download="FlowCreator-Studio.apk"
+                    className="flex-1 sm:flex-initial px-4 py-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black font-extrabold text-xs flex items-center justify-center gap-1.5 shadow-md active:scale-95 transition-all cursor-pointer"
                   >
                     <Download className="h-3.5 w-3.5" />
                     <span>Download APK</span>
                   </a>
                   <a
-                    href="https://github.com/Talha-Shaikh1/toolshub/releases"
+                    href="https://github.com/Talha-Shaikh1/toolshub/releases/tag/v1.0.0-apk"
                     target="_blank"
                     rel="noreferrer"
                     className="px-2.5 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 hover:text-white font-mono text-xs flex items-center justify-center"
-                    title="View GitHub Releases"
+                    title="View GitHub Release & Checksums"
                   >
-                    Releases
+                    GitHub
                   </a>
                 </div>
               </div>
