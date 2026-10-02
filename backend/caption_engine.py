@@ -920,18 +920,17 @@ def build_render_ffmpeg_cmd(
         rel_fonts = os.path.relpath(fonts_dir).replace("\\", "/")
         sub_filter = sub_filter[:-1] + f":fontsdir='{rel_fonts}'" + "'"
 
-    # TASK 2: Cap input with scale to 1080x1920 before libx264
-    scale_cap = "scale=w='min(1080,iw)':h='min(1920,ih)':force_original_aspect_ratio=decrease"
-
-    # TASK 2: Use -preset veryfast -crf 23 -maxrate 7M -bufsize 10M. Do not mix -crf with -b:v
+    # Pristine visual quality: CRF 18 (visually lossless standard)
     if is_4k:
         filter_str = f"scale=2160:3840:flags=lanczos,unsharp=5:5:0.8:5:5:0.0,{sub_filter}"
-        crf = "20"
-        bitrate_args = ["-maxrate", "18M", "-bufsize", "25M"]
+        crf = "18"
+        bitrate_args = ["-maxrate", "25M", "-bufsize", "35M"]
     else:
-        filter_str = f"{scale_cap},{sub_filter}"
-        crf = "23"
-        bitrate_args = ["-maxrate", "7M", "-bufsize", "10M"]
+        # Keep original camera resolution crisp without downscale blur
+        # Only cap if oversized (e.g. 4K down to 1080p using high-fidelity lanczos)
+        filter_str = f"scale=w='min(1080,iw)':h=-2:flags=lanczos,{sub_filter}"
+        crf = "18" # Visually lossless, zero blur
+        bitrate_args = ["-maxrate", "16M", "-bufsize", "25M"]
 
     cmd_inputs = ["-i", video_path]
     current_input_idx = 1
@@ -967,11 +966,11 @@ def build_render_ffmpeg_cmd(
             music_feed = "[bgm_raw]"
 
         if sfx_idx is not None:
-            # Mix 3 inputs: Voice + Ducked BGM + SFX
-            mix_filter = f"[0:a]{music_feed}[{sfx_idx}:a]amix=inputs=3:duration=first:dropout_transition=2:weights=1.0 1.0 0.8[aout]"
+            # Mix 3 inputs: Voice + Ducked BGM + SFX (dropout_transition=0 so audio never cuts early)
+            mix_filter = f"[0:a]{music_feed}[{sfx_idx}:a]amix=inputs=3:duration=first:dropout_transition=0:weights=1.0 1.0 0.8[aout]"
         else:
             # Mix 2 inputs: Voice + Ducked BGM
-            mix_filter = f"[0:a]{music_feed}amix=inputs=2:duration=first:dropout_transition=2:weights=1.0 1.0[aout]"
+            mix_filter = f"[0:a]{music_feed}amix=inputs=2:duration=first:dropout_transition=0:weights=1.0 1.0[aout]"
         filter_complex_parts.append(mix_filter)
 
     elif sfx_idx is not None:
@@ -979,7 +978,7 @@ def build_render_ffmpeg_cmd(
         filter_complex_parts.append(mix_filter)
 
     has_audio_filter = (bgm_idx is not None or sfx_idx is not None)
-    duration_args = ["-t", f"{real_duration:.3f}"] if real_duration > 0 else []
+    duration_args = [] # Let stream finish naturally to prevent cutting off the last seconds
 
     if has_audio_filter:
         cmd = [

@@ -104,7 +104,7 @@ export function renderCaptionedVideoClientSide(
 
         const recorder = new MediaRecorder(combinedStream, {
           mimeType: selectedMime,
-          videoBitsPerSecond: 8_000_000 // 8 Mbps high quality
+          videoBitsPerSecond: 18_000_000 // 18 Mbps ultra-crisp quality (zero blur)
         });
 
         const recordedChunks: Blob[] = [];
@@ -279,13 +279,13 @@ export function renderCaptionedVideoClientSide(
         };
 
         video.onended = () => {
-          isRendering = false;
-          if (onProgress) onProgress(100, "Packaging final video...");
+          if (onProgress) onProgress(100, "Finalizing final frames...");
           setTimeout(() => {
+            isRendering = false;
             if (recorder.state === "recording") {
               recorder.stop();
             }
-          }, 300);
+          }, 800);
         };
 
         // Start recording and fast playback
