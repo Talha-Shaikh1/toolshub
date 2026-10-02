@@ -1,4 +1,5 @@
 import os
+import sys
 import re
 import subprocess
 import json
@@ -220,16 +221,35 @@ def get_video_dimensions(video_path: str, ffmpeg_path: str = "ffmpeg") -> Tuple[
         ffprobe_path,
         "-v", "error",
         "-select_streams", "v:0",
-        "-show_entries", "stream=width,height",
+        "-show_entries", "stream=width,height:stream_tags=rotate:stream_side_data=rotation",
         "-of", "json",
         video_path
     ]
     try:
         res = subprocess.run(cmd, capture_output=True, text=True, check=True)
         data = json.loads(res.stdout)
-        width = data["streams"][0]["width"]
-        height = data["streams"][0]["height"]
-        return int(width), int(height)
+        stream = data["streams"][0]
+        width = int(stream.get("width", 1080))
+        height = int(stream.get("height", 1920))
+
+        # Check rotation tags (e.g. mobile 9:16 portrait video stored as 1920x1080 rotated 90/270 deg)
+        rotation = 0
+        if "tags" in stream and "rotate" in stream["tags"]:
+            try:
+                rotation = int(float(stream["tags"]["rotate"]))
+            except Exception:
+                pass
+        if "side_data_list" in stream:
+            for sd in stream["side_data_list"]:
+                if "rotation" in sd:
+                    try:
+                        rotation = int(float(sd["rotation"]))
+                    except Exception:
+                        pass
+        if abs(rotation) in (90, 270):
+            width, height = height, width
+
+        return width, height
     except Exception:
         return 1080, 1920
 
@@ -630,8 +650,8 @@ def generate_ass_subtitles(
     actual_res_x = int(res_x * scale_factor)
     actual_res_y = int(res_y * scale_factor)
     actual_font_size = int(font_size * scale_factor)
-    actual_outline = int(style['outline_width'] * scale_factor)
-    actual_shadow = int(style['shadow_depth'] * scale_factor)
+    base_outline = max(3, int(4 * scale_factor))
+    actual_shadow = max(2, int(style.get('shadow_depth', 3) * scale_factor))
 
     if position == "Center":
         alignment = 5
@@ -639,9 +659,13 @@ def generate_ass_subtitles(
     elif position == "Top":
         alignment = 8
         margin_v = int(actual_res_y * 0.12)
-    else:
+    else: # Lower Third
         alignment = 2
-        margin_v = int(actual_res_y * 0.22)
+        margin_v = int(actual_res_y * 0.18)
+
+    safe_font = font_name
+    if sys.platform != "win32" and ("Arial" in font_name or "Impact" in font_name):
+        safe_font = "DejaVu Sans"
 
     header = f"""[Script Info]
 ScriptType: v4.00+
@@ -651,7 +675,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font_name}, Segoe UI Emoji,{actual_font_size},{style['primary_color']},{style['primary_color']},{style['outline_color']},{style['outline_color']},-1,0,0,0,100,100,2,0,1,{actual_outline},{actual_shadow},{alignment},60,60,{margin_v},1
+Style: Default,{safe_font},{actual_font_size},{style['primary_color']},{style['primary_color']},{style['outline_color']},{style['outline_color']},-1,0,0,0,100,100,1,0,1,{base_outline},{actual_shadow},{alignment},60,60,{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -679,15 +703,15 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 word_text = f"{raw_text} {emoji}".strip() if emoji else raw_text
 
                 if idx == active_idx:
-                    zoom = style.get("zoom_pop", 120)
+                    zoom = style.get("zoom_pop", 115)
                     hl_color = style["highlight_color"]
                     if style.get("is_boxed", False):
                         badge_color = style.get("badge_ass_color", "&H0024BFFB&")
-                        box_outline = int(style.get("outline_width", 14) * scale_factor)
-                        line_parts.append(f"{{\\bord{box_outline}\\3c{badge_color}\\c{hl_color}\\fscx{zoom}\\fscy{zoom}}}{word_text}{{\\bord{actual_outline}\\3c{style['outline_color']}\\c{style['primary_color']}\\fscx100\\fscy100}}")
+                        box_outline = max(7, int(9 * scale_factor))
+                        line_parts.append(f"{{\\bord{box_outline}\\3c{badge_color}\\c{hl_color}\\fscx{zoom}\\fscy{zoom}}}{word_text}{{\\bord{base_outline}\\3c{style['outline_color']}\\c{style['primary_color']}\\fscx100\\fscy100}}")
                     else:
-                        active_outline = int(style.get("outline_width", 8) * scale_factor)
-                        line_parts.append(f"{{\\bord{active_outline}\\c{hl_color}\\fscx{zoom}\\fscy{zoom}}}{word_text}{{\\bord{actual_outline}\\c{style['primary_color']}\\fscx100\\fscy100}}")
+                        active_outline = max(5, int(6 * scale_factor))
+                        line_parts.append(f"{{\\bord{active_outline}\\c{hl_color}\\fscx{zoom}\\fscy{zoom}}}{word_text}{{\\bord{base_outline}\\c{style['primary_color']}\\fscx100\\fscy100}}")
                 else:
                     line_parts.append(word_text)
 
