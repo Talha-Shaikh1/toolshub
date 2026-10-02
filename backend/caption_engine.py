@@ -197,10 +197,25 @@ def format_timestamp(seconds: float) -> str:
     secs = seconds % 60
     return f"{hours}:{minutes:02d}:{secs:05.2f}"
 
+def resolve_ffprobe_path(ffmpeg_path: str = "ffmpeg") -> str:
+    # 1. Windows: ffmpeg.exe -> ffprobe.exe
+    if "ffmpeg.exe" in ffmpeg_path.lower():
+        probe = ffmpeg_path.replace("ffmpeg.exe", "ffprobe.exe").replace("FFMPEG.EXE", "ffprobe.exe")
+        if Path(probe).exists():
+            return str(probe)
+    # 2. Posix: /path/to/ffmpeg -> /path/to/ffprobe
+    if ffmpeg_path.endswith("ffmpeg"):
+        probe = ffmpeg_path[:-6] + "ffprobe"
+        if Path(probe).exists():
+            return str(probe)
+    # 3. System PATH lookup
+    which_probe = shutil.which("ffprobe")
+    if which_probe:
+        return which_probe
+    return "ffprobe"
+
 def get_video_dimensions(video_path: str, ffmpeg_path: str = "ffmpeg") -> Tuple[int, int]:
-    ffprobe_path = ffmpeg_path.replace("ffmpeg.exe", "ffprobe.exe")
-    if not Path(ffprobe_path).exists():
-        ffprobe_path = "ffprobe"
+    ffprobe_path = resolve_ffprobe_path(ffmpeg_path)
     cmd = [
         ffprobe_path,
         "-v", "error",
@@ -393,21 +408,43 @@ def parse_editable_text_to_words(text: str) -> List[Dict[str, Any]]:
     return words
 
 def get_video_duration(video_path: str, ffmpeg_path: str = "ffmpeg") -> float:
-    ffprobe_path = ffmpeg_path.replace("ffmpeg.exe", "ffprobe.exe")
-    if not Path(ffprobe_path).exists():
-        ffprobe_path = "ffprobe"
+    ffprobe_path = resolve_ffprobe_path(ffmpeg_path)
+    # 1. Primary probe: container format=duration
     cmd = [
         ffprobe_path,
         "-v", "error",
         "-show_entries", "format=duration",
-        "-of", "default=noprint_wrappers=1:nokey=1",
+        "-of", "csv=p=0",
         video_path
     ]
     try:
         res = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        return float(res.stdout.strip())
-    except Exception:
-        return 30.0
+        out_str = res.stdout.strip().split("\n")[0].strip()
+        dur = float(out_str)
+        if dur > 0:
+            return dur
+    except Exception as e:
+        print(f"⚠️ [ffprobe format=duration failed for {video_path}]: {e}", flush=True)
+
+    # 2. Fallback probe: video stream duration
+    cmd_stream = [
+        ffprobe_path,
+        "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=duration",
+        "-of", "csv=p=0",
+        video_path
+    ]
+    try:
+        res_stream = subprocess.run(cmd_stream, capture_output=True, text=True, check=True)
+        out_str = res_stream.stdout.strip().split("\n")[0].strip()
+        dur = float(out_str)
+        if dur > 0:
+            return dur
+    except Exception as e:
+        print(f"⚠️ [ffprobe stream=duration failed for {video_path}]: {e}", flush=True)
+
+    raise RuntimeError(f"Could not determine video duration with ffprobe for: {video_path}")
 
 def remove_video_silences(
     video_path: str,
@@ -857,19 +894,20 @@ def ensure_bgm_library_exists():
 # Ensure library files exist
 ensure_bgm_library_exists()
 
-def burn_subtitles_into_video(
+def build_render_ffmpeg_cmd(
     video_path: str,
     ass_path: str,
     output_video_path: str,
     ffmpeg_path: str = "ffmpeg",
     is_4k: bool = False,
-    sfx_audio_path: str = None,
-    fonts_dir: str = None,
-    bg_music_path: str = None,
-    bg_music_volume: float = 0.2,
+    sfx_audio_path: Optional[str] = None,
+    fonts_dir: Optional[str] = None,
+    bg_music_path: Optional[str] = None,
+    bg_music_volume: float = 0.20,
     enable_auto_ducking: bool = True,
-    bg_music_start_offset: float = 0.0
-) -> bool:
+    bg_music_start_offset: float = 0.0,
+    real_duration: float = 0.0
+) -> Tuple[List[str], bool]:
     # Use relative path or properly escaped path to avoid Windows colon issues
     try:
         rel_ass = os.path.relpath(ass_path).replace("\\", "/")
@@ -882,14 +920,18 @@ def burn_subtitles_into_video(
         rel_fonts = os.path.relpath(fonts_dir).replace("\\", "/")
         sub_filter = sub_filter[:-1] + f":fontsdir='{rel_fonts}'" + "'"
 
+    # TASK 2: Cap input with scale to 1080x1920 before libx264
+    scale_cap = "scale=w='min(1080,iw)':h='min(1920,ih)':force_original_aspect_ratio=decrease"
+
+    # TASK 2: Use -preset veryfast -crf 23 -maxrate 7M -bufsize 10M. Do not mix -crf with -b:v
     if is_4k:
         filter_str = f"scale=2160:3840:flags=lanczos,unsharp=5:5:0.8:5:5:0.0,{sub_filter}"
         crf = "20"
-        bitrate_args = ["-b:v", "14M", "-maxrate", "18M", "-bufsize", "25M"]
+        bitrate_args = ["-maxrate", "18M", "-bufsize", "25M"]
     else:
-        filter_str = sub_filter
+        filter_str = f"{scale_cap},{sub_filter}"
         crf = "23"
-        bitrate_args = ["-b:v", "5M", "-maxrate", "7M", "-bufsize", "10M"]
+        bitrate_args = ["-maxrate", "7M", "-bufsize", "10M"]
 
     cmd_inputs = ["-i", video_path]
     current_input_idx = 1
@@ -913,12 +955,11 @@ def burn_subtitles_into_video(
     filter_complex_parts = [f"[0:v]{filter_str}[vout]"]
 
     if bgm_idx is not None:
-        # Volume adjust for looped background music (no massive aloop buffer needed)
+        # Volume adjust for looped background music
         bgm_prep = f"[{bgm_idx}:a]volume={bg_music_volume:.2f}[bgm_raw]"
         filter_complex_parts.append(bgm_prep)
 
         if enable_auto_ducking:
-            # Auto-Ducking: When voice [0:a] is active, lower music by 4:1 ratio
             duck_filter = "[bgm_raw][0:a]sidechaincompress=threshold=0.09:ratio=4.5:attack=120:release=750[bgm_ducked]"
             filter_complex_parts.append(duck_filter)
             music_feed = "[bgm_ducked]"
@@ -938,6 +979,7 @@ def burn_subtitles_into_video(
         filter_complex_parts.append(mix_filter)
 
     has_audio_filter = (bgm_idx is not None or sfx_idx is not None)
+    duration_args = ["-t", f"{real_duration:.3f}"] if real_duration > 0 else []
 
     if has_audio_filter:
         cmd = [
@@ -948,6 +990,7 @@ def burn_subtitles_into_video(
             "-filter_complex", ";".join(filter_complex_parts),
             "-map", "[vout]",
             "-map", "[aout]",
+            *duration_args,
             "-c:v", "libx264",
             "-preset", "veryfast",
             "-tune", "fastdecode",
@@ -965,6 +1008,7 @@ def burn_subtitles_into_video(
             "-threads", "0",
             "-i", video_path,
             "-vf", filter_str,
+            *duration_args,
             "-c:v", "libx264",
             "-preset", "veryfast",
             "-tune", "fastdecode",
@@ -975,9 +1019,51 @@ def burn_subtitles_into_video(
             output_video_path
         ]
 
+    return cmd, has_audio_filter
+
+def burn_subtitles_into_video(
+    video_path: str,
+    ass_path: str,
+    output_video_path: str,
+    ffmpeg_path: str = "ffmpeg",
+    is_4k: bool = False,
+    sfx_audio_path: str = None,
+    fonts_dir: str = None,
+    bg_music_path: str = None,
+    bg_music_volume: float = 0.20,
+    enable_auto_ducking: bool = True,
+    bg_music_start_offset: float = 0.0,
+    real_duration: Optional[float] = None
+) -> bool:
+    if real_duration is None or real_duration <= 0:
+        real_duration = get_video_duration(video_path, ffmpeg_path=ffmpeg_path)
+
+    cmd, _ = build_render_ffmpeg_cmd(
+        video_path=video_path,
+        ass_path=ass_path,
+        output_video_path=output_video_path,
+        ffmpeg_path=ffmpeg_path,
+        is_4k=is_4k,
+        sfx_audio_path=sfx_audio_path,
+        fonts_dir=fonts_dir,
+        bg_music_path=bg_music_path,
+        bg_music_volume=bg_music_volume,
+        enable_auto_ducking=enable_auto_ducking,
+        bg_music_start_offset=bg_music_start_offset,
+        real_duration=real_duration
+    )
+
+    print(f"🎬 [FFmpeg Burning Sync] Starting render ({real_duration:.2f}s, threads=0, preset=veryfast)...", flush=True)
     res = subprocess.run(cmd, capture_output=True, text=True)
     if res.returncode != 0:
         raise RuntimeError(f"FFmpeg error: {res.stderr}")
+
+    # TASK 0: Check output duration mismatch
+    out_duration = get_video_duration(output_video_path, ffmpeg_path=ffmpeg_path)
+    print(f"🔍 [Duration Check] Input: {real_duration:.2f}s | Output: {out_duration:.2f}s", flush=True)
+    if abs(out_duration - real_duration) > 1.0:
+        raise RuntimeError(f"Render duration mismatch: input {real_duration:.2f}s vs output {out_duration:.2f}s (>1.0s difference)")
+
     return True
 
 def fast_lanczos_upscale_stepped(

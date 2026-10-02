@@ -3,6 +3,9 @@ import sys
 import shutil
 import json
 import uuid
+import asyncio
+import re
+import time
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
@@ -27,6 +30,7 @@ from caption_engine import (
     generate_sfx_audio_track,
     generate_ass_subtitles,
     burn_subtitles_into_video,
+    build_render_ffmpeg_cmd,
     fast_lanczos_upscale_stepped,
     render_caption_preview_frame
 )
@@ -34,6 +38,10 @@ from caption_engine import (
 BASE_DIR = Path(__file__).resolve().parent
 OUTPUTS_DIR = BASE_DIR / "outputs"
 OUTPUTS_DIR.mkdir(exist_ok=True)
+
+# TASK 1: In-process job queue & concurrency control
+render_semaphore = asyncio.Semaphore(1) # Concurrency limited to 1 for free 2-vCPU tier
+render_jobs: Dict[str, Dict[str, Any]] = {}
 
 # Load .env if present
 def load_env_file():
@@ -285,6 +293,160 @@ def generate_preview(req: PreviewRequest):
         return FileResponse(preview_file, media_type="image/jpeg")
     raise HTTPException(status_code=500, detail="Failed to render preview")
 
+async def process_render_job(job_id: str, params: dict):
+    """
+    TASK 1: Background render worker running via asyncio.create_subprocess_exec.
+    Concurrency limited via render_semaphore (1 worker on free 2-vCPU).
+    Parses FFmpeg stderr `time=` for real-time progress.
+    TASK 0: Verifies output duration against input duration.
+    """
+    async with render_semaphore:
+        job = render_jobs.get(job_id)
+        if not job:
+            return
+
+        job["status"] = "rendering"
+        job["progress"] = 5
+        job["stage"] = "Probing video streams & duration..."
+
+        input_video = params["input_video_path"]
+        output_video = params["output_video_path"]
+        temp_ass = params["temp_ass_path"]
+        temp_sfx = params["temp_sfx_path"]
+        custom_font = params["custom_font_path"]
+        ffmpeg_bin = params["ffmpeg_bin"]
+
+        try:
+            # Stage 1: Duration check via ffprobe (TASK 0)
+            real_duration = get_video_duration(input_video, ffmpeg_path=ffmpeg_bin)
+            width, height = get_video_dimensions(input_video, ffmpeg_path=ffmpeg_bin)
+            print(f"⏱️ [Job {job_id[:8]}] Probed duration: {real_duration:.2f}s, Dimensions: {width}x{height}", flush=True)
+
+            job["progress"] = 10
+            job["stage"] = f"Generating vector subtitles ({len(params['words'])} words)..."
+
+            # Stage 2: Subtitle ASS generation
+            generate_ass_subtitles(
+                words=params["words"],
+                output_ass_path=temp_ass,
+                res_x=width,
+                res_y=height,
+                style_name=params["style_name"],
+                font_name=params["ass_font"],
+                font_size=params["font_size"],
+                position=params["caption_position"],
+                words_per_chunk=params["words_per_chunk"],
+                is_4k=params["is_4k"],
+                enable_emojis=params["enable_emojis"]
+            )
+
+            # Stage 3: SFX generation if enabled
+            sfx_audio = None
+            if params["enable_sfx"]:
+                job["stage"] = "Synthesizing sound effects..."
+                sfx_audio = generate_sfx_audio_track(
+                    words=params["words"],
+                    total_duration_sec=real_duration,
+                    output_wav_path=temp_sfx,
+                    sfx_style=params["sfx_style"],
+                    volume=params["sfx_volume"]
+                )
+
+            # Stage 4: Construct FFmpeg command with scale cap & duration guard (TASK 0 & 2)
+            cmd, has_audio_filter = build_render_ffmpeg_cmd(
+                video_path=input_video,
+                ass_path=temp_ass,
+                output_video_path=output_video,
+                ffmpeg_path=ffmpeg_bin,
+                is_4k=params["is_4k"],
+                sfx_audio_path=sfx_audio,
+                fonts_dir=params["fonts_dir"],
+                bg_music_path=params["resolved_bgm_path"],
+                bg_music_volume=params["bg_music_volume"],
+                enable_auto_ducking=params["enable_auto_ducking"],
+                bg_music_start_offset=params["bg_music_start_offset"],
+                real_duration=real_duration
+            )
+
+            print(f"🎬 [Job {job_id[:8]}] FFmpeg render start ({real_duration:.1f}s, preset=veryfast, crf=23, maxrate=7M)...", flush=True)
+            job["progress"] = 15
+            job["stage"] = f"Burning subtitles & audio mix (0.0s / {real_duration:.1f}s)..."
+
+            # Stage 5: Async FFmpeg execution with real-time stderr progress parsing
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE
+            )
+
+            time_pattern = re.compile(r"time=(\d+):(\d+):([\d\.]+)")
+
+            while True:
+                line_bytes = await proc.stderr.readline()
+                if not line_bytes:
+                    break
+                line = line_bytes.decode("utf-8", errors="replace")
+                match = time_pattern.search(line)
+                if match and real_duration > 0:
+                    h = int(match.group(1))
+                    m = int(match.group(2))
+                    s = float(match.group(3))
+                    cur_rendered = h * 3600 + m * 60 + s
+                    pct = min(98, max(15, int((cur_rendered / real_duration) * 80) + 15))
+                    job["progress"] = pct
+                    job["stage"] = f"Burning subtitles: {cur_rendered:.1f}s / {real_duration:.1f}s ({pct}%)"
+
+            await proc.wait()
+
+            if proc.returncode != 0:
+                raise RuntimeError(f"FFmpeg process exited with code {proc.returncode}")
+
+            print(f"🏁 [Job {job_id[:8]}] FFmpeg render completed.", flush=True)
+
+            # Stage 6: TASK 0 Duration Verification
+            out_duration = get_video_duration(output_video, ffmpeg_path=ffmpeg_bin)
+            print(f"🔍 [Job {job_id[:8]} Duration Check] Input: {real_duration:.2f}s | Output: {out_duration:.2f}s", flush=True)
+            if abs(out_duration - real_duration) > 1.0:
+                raise RuntimeError(
+                    f"Render duration mismatch: input video was {real_duration:.2f}s, but output rendered as {out_duration:.2f}s (>1.0s difference)"
+                )
+
+            out_size_mb = Path(output_video).stat().st_size / (1024 * 1024) if Path(output_video).exists() else 0
+            job["status"] = "done"
+            job["progress"] = 100
+            job["stage"] = f"Complete ({out_size_mb:.1f} MB)"
+            job["result_url"] = f"/api/render/{job_id}/download"
+            print(f"🎉 [Job {job_id[:8]}] Ready for download ({out_size_mb:.2f} MB): {output_video}", flush=True)
+
+        except Exception as e:
+            print(f"❌ [Job {job_id[:8]} Failed] {e}", flush=True)
+            job["status"] = "failed"
+            job["error"] = str(e)
+            job["stage"] = f"Failed: {str(e)}"
+
+        finally:
+            # Clean up intermediate files
+            if Path(input_video).exists():
+                try:
+                    Path(input_video).unlink()
+                except Exception:
+                    pass
+            if Path(temp_ass).exists():
+                try:
+                    Path(temp_ass).unlink()
+                except Exception:
+                    pass
+            if Path(temp_sfx).exists():
+                try:
+                    Path(temp_sfx).unlink()
+                except Exception:
+                    pass
+            if custom_font and Path(custom_font).exists():
+                try:
+                    Path(custom_font).unlink()
+                except Exception:
+                    pass
+
 @app.post("/api/render")
 async def render_reel(
     file: UploadFile = File(...),
@@ -310,6 +472,10 @@ async def render_reel(
     custom_bg_music: Optional[UploadFile] = File(None),
     bg_music_start_offset: float = Form(0.0)
 ):
+    """
+    TASK 1: Returns a job_id immediately and processes render in background.
+    TASK 2: Guards against files > 100MB with a clear warning.
+    """
     ffmpeg_bin = resolve_ffmpeg_path()
     file_id = str(uuid.uuid4())[:8]
     input_video_path = OUTPUTS_DIR / f"raw_{file_id}_{file.filename}"
@@ -323,7 +489,19 @@ async def render_reel(
         shutil.copyfileobj(file.file, buffer)
 
     file_size_mb = input_video_path.stat().st_size / (1024 * 1024) if input_video_path.exists() else 0
-    print(f"🎬 [API Render Started] File: {file.filename} ({file_size_mb:.2f} MB), Style: {style_name}", flush=True)
+    print(f"📥 [Upload Received] File: {file.filename} ({file_size_mb:.2f} MB), Style: {style_name}", flush=True)
+
+    # TASK 2: Guard against >100MB files
+    if file_size_mb > 100.0:
+        if input_video_path.exists():
+            try:
+                input_video_path.unlink()
+            except Exception:
+                pass
+        raise HTTPException(
+            status_code=400,
+            detail="File size is over 100MB. Please use Browser Render (⚡ Fast Export) or upload a smaller video."
+        )
 
     custom_font_path = None
     if custom_font:
@@ -337,150 +515,146 @@ async def render_reel(
         with open(custom_bgm_path, "wb") as bgm_buf:
             shutil.copyfileobj(custom_bg_music.file, bgm_buf)
 
-    try:
-        active_video = str(input_video_path)
-
-        # 1. Silence Cuts (Optional)
-        if remove_silence:
-            print("✂️ [Remove Silence] Trimming audio gaps...", flush=True)
-            trimmed_video = str(OUTPUTS_DIR / f"tight_{file_id}.mp4")
-            active_video = remove_video_silences(active_video, trimmed_video, ffmpeg_path=ffmpeg_bin)
-
-        width, height = get_video_dimensions(active_video, ffmpeg_path=ffmpeg_bin)
-        total_duration = get_video_duration(active_video, ffmpeg_path=ffmpeg_bin)
-
-        # 2. Words Resolution
-        if words_json and words_json.strip():
-            try:
-                words = json.loads(words_json)
-            except Exception:
-                words = parse_editable_text_to_words(words_json)
+    # Resolve words
+    if words_json and words_json.strip():
+        try:
+            words = json.loads(words_json)
+        except Exception:
+            words = parse_editable_text_to_words(words_json)
+    else:
+        effective_key = (groq_api_key or "").strip() or os.getenv("GROQ_API_KEY", "").strip()
+        if effective_key:
+            words = transcribe_audio_groq(
+                video_path=str(input_video_path),
+                api_key=effective_key,
+                language=language,
+                ffmpeg_path=ffmpeg_bin
+            )
         else:
-            effective_key = (groq_api_key or "").strip() or os.getenv("GROQ_API_KEY", "").strip()
-            if effective_key:
-                print("⚡ [Transcribe Fallback] Calling Groq Cloud Whisper...", flush=True)
-                words = transcribe_audio_groq(
-                    video_path=active_video,
-                    api_key=effective_key,
-                    language=language,
-                    ffmpeg_path=ffmpeg_bin
-                )
-            else:
-                print("💻 [Transcribe Fallback] Running Fast Local Whisper (tiny)...", flush=True)
-                words = transcribe_audio_whisper(
-                    video_path=active_video,
-                    model_size="tiny",
-                    language=language
-                )
-
-        if not words:
-            print("⚠️ [Render Error] No words detected or provided in request.", flush=True)
-            raise HTTPException(status_code=400, detail="No speech words detected or provided.")
-
-        print(f"📝 [Subtitles] {len(words)} words verified. Generating ASS subtitles for {width}x{height}...", flush=True)
-
-        # 3. Font
-        ass_font, font_file_path = resolve_font_info(font_choice=font_choice, custom_font_path=custom_font_path)
-        fonts_dir = str(Path(font_file_path).parent) if font_file_path else None
-
-        # 4. Generate Subtitles
-        generate_ass_subtitles(
-            words=words,
-            output_ass_path=str(temp_ass_path),
-            res_x=width,
-            res_y=height,
-            style_name=style_name,
-            font_name=ass_font,
-            font_size=int(font_size),
-            position=caption_position,
-            words_per_chunk=int(words_per_chunk),
-            is_4k=is_4k,
-            enable_emojis=enable_emojis
-        )
-
-        # 5. SFX
-        sfx_audio = None
-        if enable_sfx:
-            print("🔊 [SFX Engine] Generating sound effects track...", flush=True)
-            sfx_audio = generate_sfx_audio_track(
-                words=words,
-                total_duration_sec=total_duration,
-                output_wav_path=str(temp_sfx_path),
-                sfx_style=sfx_style,
-                volume=float(sfx_volume)
+            words = transcribe_audio_whisper(
+                video_path=str(input_video_path),
+                model_size="tiny",
+                language=language
             )
 
-        # 6. Resolve Background Music Track (Local, Cloud URL, or Uploaded)
-        resolved_bgm_path = None
-        if custom_bgm_path and Path(custom_bgm_path).exists():
-            resolved_bgm_path = custom_bgm_path
-        elif bg_music_url and bg_music_url.strip().startswith("http"):
-            try:
-                import urllib.request
-                remote_bgm_file = OUTPUTS_DIR / f"remote_bgm_{file_id}.wav"
-                urllib.request.urlretrieve(bg_music_url.strip(), str(remote_bgm_file))
-                if remote_bgm_file.exists() and remote_bgm_file.stat().st_size > 500:
-                    resolved_bgm_path = str(remote_bgm_file)
-            except Exception as e:
-                print(f"[Remote BGM Download Error] {e}", flush=True)
-        elif bg_music_id and bg_music_id not in ["none", ""]:
-            for track in BGM_PRESET_LIBRARY:
-                if track["id"] == bg_music_id:
-                    possible_path = BASE_DIR / "assets" / "bgm" / track["file"]
-                    if possible_path.exists():
-                        resolved_bgm_path = str(possible_path)
-                    break
-
-        print(f"🎬 [FFmpeg Burning] Starting render ({total_duration:.1f}s, threads=0, preset=ultrafast)...", flush=True)
-
-        # 7. Burn Subtitles, SFX, and Background Music with Auto-Ducking
-        burn_subtitles_into_video(
-            video_path=active_video,
-            ass_path=str(temp_ass_path),
-            output_video_path=str(output_video_path),
-            ffmpeg_path=ffmpeg_bin,
-            is_4k=is_4k,
-            sfx_audio_path=sfx_audio,
-            fonts_dir=fonts_dir,
-            bg_music_path=resolved_bgm_path,
-            bg_music_volume=float(bg_music_volume),
-            enable_auto_ducking=bool(enable_auto_ducking),
-            bg_music_start_offset=float(bg_music_start_offset)
-        )
-
-        out_size_mb = output_video_path.stat().st_size / (1024 * 1024) if output_video_path.exists() else 0
-        print(f"🎉 [Render Complete] File ready: {out_size_mb:.2f} MB. Streaming to client.", flush=True)
-
-        return FileResponse(
-            str(output_video_path),
-            media_type="video/mp4",
-            filename=f"viral_reel_{file_id}.mp4"
-        )
-    except Exception as e:
-        print(f"❌ [Render Failed] {e}", flush=True)
-        raise
-
-    finally:
+    if not words:
         if input_video_path.exists():
-            try:
-                input_video_path.unlink()
-            except Exception:
-                pass
-        if temp_ass_path.exists():
-            try:
-                temp_ass_path.unlink()
-            except Exception:
-                pass
-        if temp_sfx_path.exists():
-            try:
-                temp_sfx_path.unlink()
-            except Exception:
-                pass
-        if custom_font_path and Path(custom_font_path).exists():
-            try:
-                Path(custom_font_path).unlink()
-            except Exception:
-                pass
+            input_video_path.unlink()
+        raise HTTPException(status_code=400, detail="No speech words detected or provided.")
+
+    # Font setup
+    ass_font, font_file_path = resolve_font_info(font_choice=font_choice, custom_font_path=custom_font_path)
+    fonts_dir = str(Path(font_file_path).parent) if font_file_path else None
+
+    # Resolve Background Music Track
+    resolved_bgm_path = None
+    if custom_bgm_path and Path(custom_bgm_path).exists():
+        resolved_bgm_path = custom_bgm_path
+    elif bg_music_url and bg_music_url.strip().startswith("http"):
+        try:
+            import urllib.request
+            remote_bgm_file = OUTPUTS_DIR / f"remote_bgm_{file_id}.wav"
+            urllib.request.urlretrieve(bg_music_url.strip(), str(remote_bgm_file))
+            if remote_bgm_file.exists() and remote_bgm_file.stat().st_size > 500:
+                resolved_bgm_path = str(remote_bgm_file)
+        except Exception as e:
+            print(f"[Remote BGM Download Error] {e}", flush=True)
+    elif bg_music_id and bg_music_id not in ["none", ""]:
+        for track in BGM_PRESET_LIBRARY:
+            if track["id"] == bg_music_id:
+                possible_path = BASE_DIR / "assets" / "bgm" / track["file"]
+                if possible_path.exists():
+                    resolved_bgm_path = str(possible_path)
+                break
+
+    # Register job in queue
+    job_id = str(uuid.uuid4())
+    render_jobs[job_id] = {
+        "job_id": job_id,
+        "status": "queued",
+        "progress": 0,
+        "stage": "Queued in render queue...",
+        "result_url": None,
+        "error": None,
+        "created_at": time.time(),
+        "filename": file.filename,
+        "output_video_path": str(output_video_path)
+    }
+
+    job_params = {
+        "input_video_path": str(input_video_path),
+        "output_video_path": str(output_video_path),
+        "temp_ass_path": str(temp_ass_path),
+        "temp_sfx_path": str(temp_sfx_path),
+        "custom_font_path": custom_font_path,
+        "ffmpeg_bin": ffmpeg_bin,
+        "words": words,
+        "style_name": style_name,
+        "ass_font": ass_font,
+        "font_size": int(font_size),
+        "caption_position": caption_position,
+        "words_per_chunk": int(words_per_chunk),
+        "is_4k": is_4k,
+        "enable_emojis": enable_emojis,
+        "enable_sfx": enable_sfx,
+        "sfx_style": sfx_style,
+        "sfx_volume": float(sfx_volume),
+        "fonts_dir": fonts_dir,
+        "resolved_bgm_path": resolved_bgm_path,
+        "bg_music_volume": float(bg_music_volume),
+        "enable_auto_ducking": bool(enable_auto_ducking),
+        "bg_music_start_offset": float(bg_music_start_offset)
+    }
+
+    # Dispatch non-blocking background task
+    asyncio.create_task(process_render_job(job_id, job_params))
+
+    return {
+        "job_id": job_id,
+        "status": "queued",
+        "progress": 0,
+        "stage": "Job queued, waiting for worker...",
+        "status_url": f"/api/render/{job_id}"
+    }
+
+@app.get("/api/render/{job_id}")
+async def get_render_job_status(job_id: str):
+    """
+    TASK 1: Polling endpoint called by frontend every 2 seconds.
+    """
+    job = render_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found or expired")
+    return {
+        "job_id": job_id,
+        "status": job["status"],
+        "progress": job["progress"],
+        "stage": job.get("stage", ""),
+        "result_url": job.get("result_url"),
+        "error": job.get("error")
+    }
+
+@app.get("/api/render/{job_id}/download")
+async def download_render_job(job_id: str):
+    """
+    Streams final MP4 video when status is 'done'.
+    """
+    job = render_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found or expired")
+    if job["status"] != "done" or not job.get("output_video_path"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Job is not completed yet (current status: {job['status']})"
+        )
+    out_path = Path(job["output_video_path"])
+    if not out_path.exists():
+        raise HTTPException(status_code=404, detail="Rendered video file not found on disk")
+    return FileResponse(
+        str(out_path),
+        media_type="video/mp4",
+        filename=f"viral_reel_{job_id[:8]}.mp4"
+    )
 
 @app.post("/api/upscale")
 async def upscale_image(

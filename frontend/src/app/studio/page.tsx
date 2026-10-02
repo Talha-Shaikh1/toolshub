@@ -756,17 +756,30 @@ export default function StudioPage() {
     }
   };
 
-  // Full Video Render (Cloud Server FFmpeg)
+  // Full Video Render (Cloud Server FFmpeg with Task 1 Polling & XMLHttpRequest upload)
   const handleRenderVideo = async () => {
     if (!videoFile) {
       setErrorMessage("Please upload a video file first");
       return;
     }
 
+    // TASK 2: Guard against >100MB upload
+    const fileSizeMB = videoFile.size / (1024 * 1024);
+    if (fileSizeMB > 100) {
+      const warnMsg = "File is over 100MB. Please use Browser Render (⚡ Fast Export) or upload a smaller video.";
+      setErrorMessage(warnMsg);
+      toast.error("File Too Large for Cloud", {
+        id: "export-reel",
+        description: warnMsg,
+        duration: 8000
+      });
+      return;
+    }
+
     setIsRendering(true);
     setErrorMessage(null);
-    setRenderProgress(15);
-    setRenderStep("Analyzing audio...");
+    setRenderProgress(0);
+    setRenderStep("Preparing payload...");
 
     const formData = new FormData();
     formData.append("file", videoFile);
@@ -799,103 +812,143 @@ export default function StudioPage() {
       formData.append("bg_music_start_offset", bgmStartOffset.toString());
     }
     if (groqKey) formData.append("groq_api_key", groqKey);
-    // Guarantee words_json is passed so the backend NEVER re-transcribes from scratch
     if (wordsList && wordsList.length > 0) {
       formData.append("words_json", JSON.stringify(wordsList));
     } else if (editableTranscript && editableTranscript.trim()) {
       formData.append("words_json", editableTranscript);
     }
 
-    let elapsedSeconds = 0;
-    const progressInterval = setInterval(() => {
-      elapsedSeconds += 1;
-      setRenderProgress((prev) => {
-        if (prev < 35) return prev + 4;
-        if (prev < 70) return prev + 2;
-        if (prev < 90) return prev + 1;
-        return 92;
-      });
-      setRenderStep((prev) => {
-        if (elapsedSeconds < 6) return "Uploading & parsing video streams...";
-        if (elapsedSeconds < 20) return "Burning vector subtitles & SFX with FFmpeg...";
-        return "Mastering audio ducking & finalizing MP4...";
-      });
-      toast.loading(`Rendering Viral Reel (${elapsedSeconds}s)...`, {
-        id: "export-reel",
-        description: "Burning high-retention subtitles & audio mix."
-      });
-    }, 1000);
+    const toastId = "export-reel";
 
     try {
-      setRenderProgress(15);
-      setRenderStep("Uploading video to render engine...");
-      toast.loading("Rendering Viral Reel (0s)...", {
-        id: "export-reel",
-        description: "Burning subtitles, SFX, and ducked audio mix."
-      });
-
       let activeApi = apiUrl;
-      let res: Response;
-      try {
-        res = await fetch(`${activeApi}/api/render`, {
-          method: "POST",
-          body: formData
-        });
-      } catch (netErr) {
-        if (activeApi !== LIVE_HF_BACKEND_URL) {
-          console.warn("[Render Auto-Fallback] Switching to Live HF Space:", LIVE_HF_BACKEND_URL);
-          activeApi = LIVE_HF_BACKEND_URL;
-          setApiUrl(LIVE_HF_BACKEND_URL);
-          res = await fetch(`${LIVE_HF_BACKEND_URL}/api/render`, {
-            method: "POST",
-            body: formData
-          });
-        } else {
-          throw netErr;
-        }
-      }
 
-      if (!res.ok) throw new Error(await res.text());
-
-      setRenderProgress(95);
-      setRenderStep("Downloading rendered MP4...");
-
-      const blob = await res.blob();
-      const videoBlobUrl = URL.createObjectURL(blob);
-      setExportedVideoUrl(videoBlobUrl);
-      setRenderProgress(100);
-      setRenderStep("Export complete!");
-
-      // Auto-trigger browser download
-      try {
-        const a = document.createElement("a");
-        a.href = videoBlobUrl;
-        a.download = `${videoFile.name.replace(/\.[^/.]+$/, "")}_captioned.mp4`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-      } catch (dlErr) {
-        console.warn("Auto-download trigger failed:", dlErr);
-      }
-
-      toast.success("Viral Reel Rendered & Downloaded! 🎉", {
-        id: "export-reel",
-        description: `Rendered in ${elapsedSeconds}s with animated subtitles.`
+      // STAGE 1: Uploading with real XMLHttpRequest.upload.onprogress
+      setRenderStep("Uploading video to cloud...");
+      toast.loading("Uploading video to cloud (0%)...", {
+        id: toastId,
+        description: `Starting transfer of ${fileSizeMB.toFixed(1)} MB...`
       });
+
+      const uploadResult: any = await new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", `${activeApi}/api/render`);
+
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) {
+            const uploadPct = Math.round((e.loaded / e.total) * 100);
+            // Map upload 0-100% to progress bar 0-25%
+            setRenderProgress(Math.min(25, Math.round(uploadPct * 0.25)));
+            setRenderStep(`Uploading to cloud: ${uploadPct}% (${((e.loaded) / (1024 * 1024)).toFixed(1)}MB / ${((e.total) / (1024 * 1024)).toFixed(1)}MB)`);
+            toast.loading(`Uploading to cloud (${uploadPct}%)...`, {
+              id: toastId,
+              description: `Uploaded ${((e.loaded) / (1024 * 1024)).toFixed(1)}MB of ${((e.total) / (1024 * 1024)).toFixed(1)}MB`
+            });
+          }
+        };
+
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            try {
+              resolve(JSON.parse(xhr.responseText));
+            } catch {
+              resolve({ raw: xhr.responseText });
+            }
+          } else {
+            let errorText = xhr.responseText;
+            try {
+              const parsed = JSON.parse(xhr.responseText);
+              if (parsed.detail) errorText = parsed.detail;
+            } catch {}
+            reject(new Error(errorText || `Upload failed with HTTP ${xhr.status}`));
+          }
+        };
+
+        xhr.onerror = () => reject(new Error("Network error during video upload."));
+        xhr.send(formData);
+      });
+
+      const jobId = uploadResult.job_id;
+      if (!jobId) {
+        throw new Error("No job ID received from render queue.");
+      }
+
+      // STAGE 2 & 3: Queued -> Rendering -> Ready (Poll every 2 seconds)
+      setRenderProgress(25);
+      setRenderStep("Job queued in render queue...");
+      toast.loading("Queued in render queue...", {
+        id: toastId,
+        description: "Waiting for worker allocation..."
+      });
+
+      let isFinished = false;
+
+      while (!isFinished) {
+        await new Promise((r) => setTimeout(r, 2000));
+
+        const pollRes = await fetch(`${activeApi}/api/render/${jobId}`);
+        if (!pollRes.ok) {
+          throw new Error(`Failed to query job status (HTTP ${pollRes.status})`);
+        }
+
+        const jobStatus = await pollRes.json();
+
+        if (jobStatus.status === "failed") {
+          throw new Error(jobStatus.error || "Cloud rendering failed on server.");
+        }
+
+        if (jobStatus.status === "done") {
+          isFinished = true;
+          setRenderProgress(100);
+          setRenderStep("Render complete! Downloading...");
+
+          const downloadUrl = `${activeApi}/api/render/${jobId}/download`;
+          setExportedVideoUrl(downloadUrl);
+
+          // Auto-trigger browser download
+          try {
+            const a = document.createElement("a");
+            a.href = downloadUrl;
+            a.download = `${videoFile.name.replace(/\.[^/.]+$/, "")}_captioned.mp4`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+          } catch (dlErr) {
+            console.warn("Auto-download trigger failed:", dlErr);
+          }
+
+          toast.success("Viral Reel Rendered & Downloaded! 🎉", {
+            id: toastId,
+            description: "Server render complete with high-retention subtitles & audio mix."
+          });
+          break;
+        }
+
+        // In progress (Queued or Rendering)
+        const currentProgress = Math.max(25, jobStatus.progress || 25);
+        setRenderProgress(currentProgress);
+        const stageLabel = jobStatus.stage || (jobStatus.status === "queued" ? "Queued in render queue..." : "Burning subtitles & audio...");
+        setRenderStep(stageLabel);
+
+        toast.loading(`Cloud Rendering (${currentProgress}%)...`, {
+          id: toastId,
+          description: stageLabel
+        });
+      }
+
     } catch (err: any) {
       const rawMsg = err.message || "";
       let friendlyMsg = rawMsg;
       if (rawMsg.includes("Failed to fetch") || rawMsg.includes("NetworkError") || rawMsg.includes("Load failed")) {
-        friendlyMsg = "Cannot connect to backend server. Hugging Face Space may be waking up. Please wait ~30 seconds and retry export.";
+        friendlyMsg = "Cannot connect to backend server. Hugging Face Space may be waking up. Please retry in ~30s.";
       }
       setErrorMessage(friendlyMsg);
       toast.error("Rendering Failed", {
-        id: "export-reel",
+        id: toastId,
         description: friendlyMsg,
-        duration: 6000
+        duration: 8000
       });
     } finally {
-      clearInterval(progressInterval);
       setIsRendering(false);
     }
   };
