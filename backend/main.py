@@ -299,24 +299,41 @@ def search_music_catalog(
 
 @app.post("/api/transcribe")
 async def transcribe_video(
-    file: UploadFile = File(...),
+    file: Optional[UploadFile] = File(None),
+    video_id: Optional[str] = Form(None),
     model: str = Form("base"),
     language: str = Form("Auto-detect"),
     groq_api_key: Optional[str] = Form(None)
 ):
     ffmpeg_bin = resolve_ffmpeg_path()
-    file_id = str(uuid.uuid4())[:8]
-    temp_video = OUTPUTS_DIR / f"upload_{file_id}_{file.filename}"
+    temp_video = None
+    video_path = None
+    is_temp = False
 
-    with open(temp_video, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    # Check if a pre-cached video_id was provided
+    if video_id and video_id in cached_videos:
+        cached_info = cached_videos[video_id]
+        cand_path = Path(cached_info["file_path"])
+        if cand_path.exists():
+            video_path = str(cand_path)
+            print(f"⚡ [Transcribe] Using cached raw video {video_id} directly ({cached_info.get('size_mb', 0):.2f} MB)", flush=True)
+
+    if not video_path:
+        if not file:
+            raise HTTPException(status_code=400, detail="Either video_id or file upload must be provided.")
+        file_id = str(uuid.uuid4())[:8]
+        temp_video = OUTPUTS_DIR / f"upload_{file_id}_{file.filename}"
+        with open(temp_video, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        video_path = str(temp_video)
+        is_temp = True
 
     try:
         effective_key = (groq_api_key or "").strip() or os.getenv("GROQ_API_KEY", "").strip()
 
         if effective_key:
             words = transcribe_audio_groq(
-                video_path=str(temp_video),
+                video_path=video_path,
                 api_key=effective_key,
                 language=language,
                 ffmpeg_path=ffmpeg_bin
@@ -325,7 +342,7 @@ async def transcribe_video(
         else:
             actual_model = "tiny"
             words = transcribe_audio_whisper(
-                video_path=str(temp_video),
+                video_path=video_path,
                 model_size=actual_model,
                 language=language,
                 ffmpeg_path=ffmpeg_bin
@@ -340,7 +357,7 @@ async def transcribe_video(
             "editable_text": format_words_to_editable_text(words)
         }
     finally:
-        if temp_video.exists():
+        if is_temp and temp_video and temp_video.exists():
             try:
                 temp_video.unlink()
             except Exception:

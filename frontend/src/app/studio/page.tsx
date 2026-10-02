@@ -318,6 +318,7 @@ export default function StudioPage() {
   const uploadedVideoIdRef = useRef<string | null>(null);
   const isBgUploadingRef = useRef<boolean>(false);
   const bgUploadPromiseRef = useRef<Promise<string> | null>(null);
+  const handleTranscribeSpeechRef = useRef<((file?: File) => void) | null>(null);
 
   // Settings Modal
   const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
@@ -409,10 +410,14 @@ export default function StudioPage() {
               setUploadedVideoId(res.video_id);
               uploadedVideoIdRef.current = res.video_id;
               setBgUploadDone(true);
-              toast.success("Cloud Synced (Zero-Wait Ready) ⚡", {
-                description: `Video cached silently (${res.size_mb || (file.size / (1024*1024)).toFixed(1)} MB). Fast Export will now take 0s upload wait!`
+              toast.success("Cloud Upload 100% Complete ⚡", {
+                description: `Video cached (${res.size_mb || (file.size / (1024*1024)).toFixed(1)} MB). Ab AI captions auto-generate ho rahi hain...`
               });
               resolve(res.video_id);
+              // Auto-trigger caption generation now that upload is 100% complete!
+              if (handleTranscribeSpeechRef.current) {
+                handleTranscribeSpeechRef.current(file);
+              }
               return;
             }
           } catch (parseErr) {
@@ -699,10 +704,24 @@ export default function StudioPage() {
       toast.error("No Video Found", { description: "Please upload or drop a video file first." });
       return;
     }
-    setIsTranscribing(true);
-    setErrorMessage(null);
 
     const toastId = "transcribe-speech";
+
+    // User Rule: Jab tak cloud per poori upload na ho jaye, captions generate na hon!
+    if (isBgUploadingRef.current && bgUploadPromiseRef.current) {
+      toast.loading(`Cloud Uploading (${bgUploadProgress}%)...`, {
+        id: toastId,
+        description: "Video 100% upload hotay hi captions generate hongi taake export instant ho!"
+      });
+      try {
+        await bgUploadPromiseRef.current;
+      } catch (uploadWaitErr) {
+        console.warn("Background upload error during transcribe wait:", uploadWaitErr);
+      }
+    }
+
+    setIsTranscribing(true);
+    setErrorMessage(null);
 
     try {
       // 1. Direct Groq Cloud Mode (Ultra Fast: ~0.8s) if user provided Groq API Key
@@ -775,7 +794,11 @@ export default function StudioPage() {
       });
 
       const formData = new FormData();
-      formData.append("file", uploadPayload, uploadFilename);
+      if (uploadedVideoIdRef.current) {
+        formData.append("video_id", uploadedVideoIdRef.current);
+      } else {
+        formData.append("file", uploadPayload, uploadFilename);
+      }
       formData.append("model", "base");
       formData.append("language", "Auto-detect");
       if (groqKey) formData.append("groq_api_key", groqKey);
@@ -812,6 +835,10 @@ export default function StudioPage() {
       setIsTranscribing(false);
     }
   };
+
+  useEffect(() => {
+    handleTranscribeSpeechRef.current = handleTranscribeSpeech;
+  });
 
   // 1. FAST CLIENT-SIDE EXPORT (Zero-Upload Instant GPU Render)
   const handleClientSideRender = async (targetResOverride?: "original" | "1080p" | "2k" | "4k") => {
@@ -1246,11 +1273,16 @@ export default function StudioPage() {
           {/* 1. Generate / Re-generate Captions */}
           <button
             onClick={() => handleTranscribeSpeech()}
-            disabled={isTranscribing || !videoFile}
+            disabled={isTranscribing || !videoFile || isBgUploading}
             className="h-8 px-2 sm:px-3 rounded-md bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/50 text-amber-300 font-bold text-xs flex items-center gap-1.5 shadow-sm active:scale-95 disabled:opacity-40 transition-all cursor-pointer"
             title="Auto-transcribe speech to word-level animated captions"
           >
-            {isTranscribing ? (
+            {isBgUploading ? (
+              <>
+                <RefreshCw className="h-3 w-3 animate-spin text-amber-400" />
+                <span className="hidden sm:inline">Uploading ({bgUploadProgress}%)...</span>
+              </>
+            ) : isTranscribing ? (
               <>
                 <RefreshCw className="h-3 w-3 animate-spin text-amber-400" />
                 <span className="hidden sm:inline">Transcribing...</span>
@@ -1287,11 +1319,17 @@ export default function StudioPage() {
           {/* Primary Action: Direct Zero-Wait High Bitrate Export */}
           <button
             onClick={handleRenderVideo}
-            disabled={isRendering || !videoFile}
+            disabled={isRendering || !videoFile || isBgUploading}
             className="h-8 px-2.5 sm:px-4 rounded-md bg-gradient-to-r from-amber-500 via-amber-400 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black font-extrabold text-xs flex items-center gap-1.5 shadow-md shadow-amber-500/20 active:scale-95 disabled:opacity-40 transition-all cursor-pointer"
             title="Export Reel: 100% Original Camera Bitrate (193MB+ Guaranteed) & Exact Duration"
           >
-            {isRendering ? (
+            {isBgUploading ? (
+              <>
+                <RefreshCw className="h-3.5 w-3.5 animate-spin text-black" />
+                <span className="hidden sm:inline">Uploading ({bgUploadProgress}%)...</span>
+                <span className="sm:hidden text-[11px]">{bgUploadProgress}%</span>
+              </>
+            ) : isRendering ? (
               <>
                 <RefreshCw className="h-3.5 w-3.5 animate-spin text-black" />
                 <span>{renderStep ? `${renderProgress}%` : `Exporting...`}</span>
@@ -1416,25 +1454,48 @@ export default function StudioPage() {
 
               {/* Primary Caption Generation Action */}
               {videoFile && (
-                <div className="mt-2 space-y-1">
-                  <button
-                    type="button"
-                    onClick={() => handleTranscribeSpeech()}
-                    disabled={isTranscribing}
-                    className="w-full py-2.5 px-3 rounded-lg bg-gradient-to-r from-amber-500 via-amber-400 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black font-extrabold text-xs flex items-center justify-center gap-2 shadow-lg shadow-amber-500/25 active:scale-95 transition-all cursor-pointer disabled:opacity-50"
-                  >
-                    {isTranscribing ? (
-                      <>
-                        <RefreshCw className="h-4 w-4 animate-spin text-black" />
-                        <span>Transcribing Speech (~1s)...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Wand2 className="h-4 w-4 text-black" />
-                        <span>{wordsList.length > 0 ? "✨ Re-Generate AI Captions" : "✨ Generate AI Captions (1-Click)"}</span>
-                      </>
-                    )}
-                  </button>
+                <div className="mt-2 space-y-1.5">
+                  {isBgUploading ? (
+                    <div className="w-full p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs space-y-2">
+                      <div className="flex items-center justify-between font-bold">
+                        <span className="flex items-center gap-1.5">
+                          <RefreshCw className="h-3.5 w-3.5 animate-spin text-amber-400" />
+                          <span>Uploading to Cloud ({bgUploadProgress}%)</span>
+                        </span>
+                        <span className="text-[10px] font-mono text-slate-400">
+                          {(videoFile.size / (1024 * 1024)).toFixed(1)} MB
+                        </span>
+                      </div>
+                      <div className="w-full bg-slate-900 rounded-full h-2 overflow-hidden border border-slate-800">
+                        <div
+                          className="bg-gradient-to-r from-amber-500 to-orange-500 h-full transition-all duration-300 rounded-full"
+                          style={{ width: `${bgUploadProgress}%` }}
+                        />
+                      </div>
+                      <p className="text-[10px] text-slate-300 text-center font-medium leading-relaxed">
+                        ⏳ 100% upload hotay hi captions auto-generate hongi taake export instant 0s ho!
+                      </p>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => handleTranscribeSpeech()}
+                      disabled={isTranscribing}
+                      className="w-full py-2.5 px-3 rounded-lg bg-gradient-to-r from-amber-500 via-amber-400 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black font-extrabold text-xs flex items-center justify-center gap-2 shadow-lg shadow-amber-500/25 active:scale-95 transition-all cursor-pointer disabled:opacity-50"
+                    >
+                      {isTranscribing ? (
+                        <>
+                          <RefreshCw className="h-4 w-4 animate-spin text-black" />
+                          <span>Transcribing Speech (~1s)...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Wand2 className="h-4 w-4 text-black" />
+                          <span>{wordsList.length > 0 ? "✨ Re-Generate AI Captions" : "✨ Generate AI Captions (1-Click)"}</span>
+                        </>
+                      )}
+                    </button>
+                  )}
                   {wordsList.length > 0 ? (
                     <div className="flex items-center justify-between text-[10px] text-emerald-400 px-1 pt-0.5">
                       <span className="flex items-center gap-1 font-semibold">
@@ -1442,7 +1503,7 @@ export default function StudioPage() {
                       </span>
                       <span className="text-slate-400 font-mono">Groq LPU Active</span>
                     </div>
-                  ) : (
+                  ) : !isBgUploading && (
                     <p className="text-[9px] text-slate-400 text-center pt-0.5">
                       Extracts word-by-word timestamps in ~1s
                     </p>
