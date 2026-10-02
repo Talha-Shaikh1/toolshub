@@ -927,8 +927,25 @@ def build_render_ffmpeg_cmd(
         # Original video pixels are 100% untouched! Only vector subtitles are burned
         filter_str = sub_filter
 
-    # Visually lossless studio grade encoding
-    crf = "18"
+    # 2. EXACT ORIGINAL MBs BITRATE ALLOCATION (Zero Compression Drop)
+    try:
+        input_size_bytes = Path(video_path).stat().st_size
+        if real_duration > 0 and input_size_bytes > 0:
+            target_bitrate_bps = int((input_size_bytes * 8) / real_duration)
+            target_bitrate_str = f"{int(target_bitrate_bps / 1000)}k"
+            maxrate_str = f"{int(target_bitrate_bps * 1.3 / 1000)}k"
+            bufsize_str = f"{int(target_bitrate_bps * 2 / 1000)}k"
+        else:
+            target_bitrate_str = "28M"
+            maxrate_str = "35M"
+            bufsize_str = "50M"
+    except Exception:
+        target_bitrate_str = "28M"
+        maxrate_str = "35M"
+        bufsize_str = "50M"
+
+    # Pristine visually lossless CRF 14
+    crf = "14"
 
     cmd_inputs = ["-i", video_path]
     current_input_idx = 1
@@ -989,6 +1006,9 @@ def build_render_ffmpeg_cmd(
             "-c:v", "libx264",
             "-preset", "veryfast",
             "-tune", "fastdecode",
+            "-b:v", target_bitrate_str,
+            "-maxrate", maxrate_str,
+            "-bufsize", bufsize_str,
             "-crf", crf,
             "-c:a", "aac",
             "-b:a", "320k",
@@ -1005,6 +1025,9 @@ def build_render_ffmpeg_cmd(
             "-c:v", "libx264",
             "-preset", "veryfast",
             "-tune", "fastdecode",
+            "-b:v", target_bitrate_str,
+            "-maxrate", maxrate_str,
+            "-bufsize", bufsize_str,
             "-crf", crf,
             "-c:a", "copy",
             "-movflags", "+faststart",

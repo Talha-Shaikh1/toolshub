@@ -1083,16 +1083,7 @@ export default function StudioPage() {
             )}
           </button>
 
-          {/* 2. Fast Browser / Device Export (0MB Upload, Exact MBs Retention, No Freeze) */}
-          <button
-            onClick={handleClientSideRender}
-            disabled={isRendering || !videoFile}
-            className="h-8 px-3 rounded-md bg-slate-900 hover:bg-slate-800 border border-amber-500/40 text-amber-300 hover:text-white font-bold text-xs flex items-center gap-1.5 shadow-sm active:scale-95 disabled:opacity-40 transition-all cursor-pointer"
-            title="Fast Device Export: 0MB internet upload! Uses your GPU to render with exact same MBs as original video."
-          >
-            <Zap className="h-3.5 w-3.5 text-amber-400" />
-            <span>⚡ Browser Export (0 Upload)</span>
-          </button>
+
         </div>
       </header>
 
