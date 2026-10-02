@@ -884,10 +884,12 @@ def burn_subtitles_into_video(
 
     if is_4k:
         filter_str = f"scale=2160:3840:flags=lanczos,unsharp=5:5:0.8:5:5:0.0,{sub_filter}"
-        crf = "18"
+        crf = "20"
+        bitrate_args = ["-b:v", "14M", "-maxrate", "18M", "-bufsize", "25M"]
     else:
         filter_str = sub_filter
-        crf = "22"
+        crf = "23"
+        bitrate_args = ["-b:v", "5M", "-maxrate", "7M", "-bufsize", "10M"]
 
     cmd_inputs = ["-i", video_path]
     current_input_idx = 1
@@ -947,9 +949,10 @@ def burn_subtitles_into_video(
             "-map", "[vout]",
             "-map", "[aout]",
             "-c:v", "libx264",
-            "-preset", "ultrafast",
+            "-preset", "veryfast",
             "-tune", "fastdecode",
             "-crf", crf,
+            *bitrate_args,
             "-c:a", "aac",
             "-b:a", "192k",
             "-movflags", "+faststart",
@@ -963,9 +966,10 @@ def burn_subtitles_into_video(
             "-i", video_path,
             "-vf", filter_str,
             "-c:v", "libx264",
-            "-preset", "ultrafast",
+            "-preset", "veryfast",
             "-tune", "fastdecode",
             "-crf", crf,
+            *bitrate_args,
             "-c:a", "copy",
             "-movflags", "+faststart",
             output_video_path

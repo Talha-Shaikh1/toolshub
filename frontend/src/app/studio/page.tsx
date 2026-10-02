@@ -865,7 +865,20 @@ export default function StudioPage() {
       setExportedVideoUrl(videoBlobUrl);
       setRenderProgress(100);
       setRenderStep("Export complete!");
-      toast.success("Reel Ready to Download! 🎉", {
+
+      // Auto-trigger browser download
+      try {
+        const a = document.createElement("a");
+        a.href = videoBlobUrl;
+        a.download = `${videoFile.name.replace(/\.[^/.]+$/, "")}_captioned.mp4`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      } catch (dlErr) {
+        console.warn("Auto-download trigger failed:", dlErr);
+      }
+
+      toast.success("Viral Reel Rendered & Downloaded! 🎉", {
         id: "export-reel",
         description: `Rendered in ${elapsedSeconds}s with animated subtitles.`
       });
