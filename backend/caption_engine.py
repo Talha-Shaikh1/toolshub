@@ -6,7 +6,7 @@ import shutil
 import time
 import zipfile
 from pathlib import Path
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 from PIL import Image, ImageFilter, ImageEnhance, ImageDraw, ImageFont
 
 STYLE_PRESETS = {
