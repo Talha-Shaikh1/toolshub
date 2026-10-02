@@ -49,14 +49,15 @@ export function renderCaptionedVideoClientSide(
     video.muted = false;
     video.playsInline = true;
     video.crossOrigin = "anonymous";
-    // Attach invisibly to DOM to prevent Chrome from throttling video frames
+    // Keep video inside visible browser viewport bounds so Chrome GPU decoder does NOT throttle frames
     video.style.position = "fixed";
-    video.style.top = "-9999px";
-    video.style.left = "-9999px";
-    video.style.opacity = "0.01";
+    video.style.bottom = "0px";
+    video.style.right = "0px";
+    video.style.width = "320px";
+    video.style.height = "180px";
+    video.style.opacity = "0.02";
     video.style.pointerEvents = "none";
-    video.style.width = "1px";
-    video.style.height = "1px";
+    video.style.zIndex = "-1";
     document.body.appendChild(video);
 
     const playbackSpeed = 1.0; // Strictly 1.0x to preserve 100% natural duration, audio pitch & word sync
@@ -114,9 +115,13 @@ export function renderCaptionedVideoClientSide(
           }
         }
 
+        // Calculate exact bitrate from original file size to preserve exact MBs without compression loss
+        const computedBitrate = Math.round((videoFile.size * 8) / Math.max(1, duration));
+        const targetBitrate = Math.max(25_000_000, computedBitrate);
+
         const recorder = new MediaRecorder(combinedStream, {
           mimeType: selectedMime,
-          videoBitsPerSecond: 18_000_000 // 18 Mbps ultra-crisp quality (zero blur)
+          videoBitsPerSecond: targetBitrate
         });
 
         const recordedChunks: Blob[] = [];
