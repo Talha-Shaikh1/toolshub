@@ -162,39 +162,65 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Resolve Static UI directory (if built)
+STATIC_UI_DIR = BASE_DIR / "static_ui"
+if not STATIC_UI_DIR.exists():
+    STATIC_UI_DIR = BASE_DIR.parent / "frontend" / "out"
+
+# Mount frontend assets if available
+if STATIC_UI_DIR.exists():
+    if (STATIC_UI_DIR / "_next").exists():
+        app.mount("/_next", StaticFiles(directory=str(STATIC_UI_DIR / "_next")), name="next_assets")
+    if (STATIC_UI_DIR / "downloads").exists():
+        app.mount("/downloads", StaticFiles(directory=str(STATIC_UI_DIR / "downloads")), name="downloads")
+    if (STATIC_UI_DIR / "audio").exists():
+        app.mount("/audio", StaticFiles(directory=str(STATIC_UI_DIR / "audio")), name="audio")
+
 # Mount outputs for static file retrieval
 app.mount("/outputs", StaticFiles(directory=str(OUTPUTS_DIR)), name="outputs")
 
 @app.get("/")
 def read_root():
+    if STATIC_UI_DIR.exists() and (STATIC_UI_DIR / "index.html").exists():
+        return FileResponse(str(STATIC_UI_DIR / "index.html"))
     return {
         "service": "FlowCreator OS (ReelStudio Pro) API",
         "version": "2.1.0",
         "status": "online",
-        "docs_url": "/docs",
-        "workstations": [
-            "Viral Caption Studio Pro (/studio)",
-            "4K / 8K Super-Resolution Lab (/upscaler)",
-            "AI Voice Clone & Dubbing (/voice-dubbing)",
-            "Auto B-Roll Splicer (/b-roll)"
-        ],
-        "endpoints": [
-            "/api/health",
-            "/api/presets",
-            "/api/transcribe",
-            "/api/preview",
-            "/api/render",
-            "/api/upload-raw",
-            "/api/render-cached",
-            "/api/upscale",
-            "/api/voice/languages",
-            "/api/voice/clone",
-            "/api/voice/dub",
-            "/api/broll/library",
-            "/api/broll/detect-keywords",
-            "/api/broll/splice"
-        ]
+        "docs_url": "/docs"
     }
+
+@app.get("/studio")
+def serve_studio():
+    if STATIC_UI_DIR.exists():
+        studio_html = STATIC_UI_DIR / "studio.html"
+        if studio_html.exists():
+            return FileResponse(str(studio_html))
+    return JSONResponse(status_code=404, content={"detail": "Studio UI not built"})
+
+@app.get("/upscaler")
+def serve_upscaler():
+    if STATIC_UI_DIR.exists():
+        target = STATIC_UI_DIR / "upscaler.html"
+        if target.exists():
+            return FileResponse(str(target))
+    return JSONResponse(status_code=404, content={"detail": "Upscaler UI not built"})
+
+@app.get("/voice-dubbing")
+def serve_voice_dubbing():
+    if STATIC_UI_DIR.exists():
+        target = STATIC_UI_DIR / "voice-dubbing.html"
+        if target.exists():
+            return FileResponse(str(target))
+    return JSONResponse(status_code=404, content={"detail": "Voice Dubbing UI not built"})
+
+@app.get("/b-roll")
+def serve_b_roll():
+    if STATIC_UI_DIR.exists():
+        target = STATIC_UI_DIR / "b-roll.html"
+        if target.exists():
+            return FileResponse(str(target))
+    return JSONResponse(status_code=404, content={"detail": "B-Roll UI not built"})
 
 @app.get("/api/health")
 def health_check():
@@ -1249,6 +1275,21 @@ async def splice_broll_into_video(
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"B-roll splicing failed: {str(e)}")
+
+# Static fallback catch-all for any other static assets
+@app.get("/{full_path:path}")
+def serve_catchall_static(full_path: str):
+    if STATIC_UI_DIR.exists():
+        target = STATIC_UI_DIR / full_path
+        if target.is_file():
+            return FileResponse(str(target))
+        html_target = STATIC_UI_DIR / f"{full_path}.html"
+        if html_target.is_file():
+            return FileResponse(str(html_target))
+        index_target = STATIC_UI_DIR / full_path / "index.html"
+        if index_target.is_file():
+            return FileResponse(str(index_target))
+    raise HTTPException(status_code=404, detail="Not Found")
 
 if __name__ == "__main__":
     import uvicorn

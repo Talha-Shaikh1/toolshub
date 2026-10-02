@@ -31,16 +31,8 @@ start /b cmd /c "cd /d %~dp0backend && python -m uvicorn main:app --host 127.0.0
 :: Wait 2 seconds for backend initialization
 timeout /t 2 /nobreak >nul
 
-:: 4. Start Next.js Frontend Studio on port 3000
-echo [2/3] Starting Studio Interface (127.0.0.1:3000)...
-start /b cmd /c "cd /d %~dp0frontend && npm run dev" >nul 2>&1
-
-:: Wait 3 seconds for frontend server
-timeout /t 3 /nobreak >nul
-
-:: 5. Launch Standalone Native Window (No Browser Address Bar / App Mode)
-echo [3/3] Opening Native Desktop Studio Window...
-set "APP_URL=http://localhost:3000/studio"
+:: 4. Check if Frontend dev server is desired, otherwise use high-speed built-in UI on port 8000
+set "APP_URL=http://localhost:8000/studio"
 
 :: Try Edge in App mode
 if exist "%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe" (

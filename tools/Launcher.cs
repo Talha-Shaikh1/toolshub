@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Diagnostics;
+using System.Threading;
 using System.Windows.Forms;
 
 namespace FlowCreatorStudio
@@ -12,25 +13,73 @@ namespace FlowCreatorStudio
         {
             try
             {
-                // Default target is the live studio
-                string targetUrl = "https://01talha-arqa-chatbot.hf.space/studio";
+                string targetUrl = null;
                 
-                // If user has local server running on port 3000, prefer local GPU mode
-                try
+                // 1. Check if local GPU engine is already running on port 8000
+                if (IsUrlAvailable("http://127.0.0.1:8000/studio"))
                 {
-                    var req = System.Net.WebRequest.Create("http://127.0.0.1:3000/studio");
-                    req.Timeout = 800;
-                    using (var resp = req.GetResponse())
+                    targetUrl = "http://127.0.0.1:8000/studio";
+                }
+                // 2. Check if local frontend dev server is running on port 3000
+                else if (IsUrlAvailable("http://127.0.0.1:3000/studio"))
+                {
+                    targetUrl = "http://127.0.0.1:3000/studio";
+                }
+                else
+                {
+                    // 3. Try to auto-start local GPU engine on this computer if repo exists
+                    string[] possiblePaths = new string[]
                     {
-                        targetUrl = "http://127.0.0.1:3000/studio";
+                        @"C:\Work\reel-caption-tool\backend",
+                        Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "backend"),
+                        Path.Combine(AppDomain.CurrentDomain.BaseDirectory, @"..\backend")
+                    };
+
+                    string backendPath = null;
+                    foreach (var p in possiblePaths)
+                    {
+                        if (File.Exists(Path.Combine(p, "main.py")))
+                        {
+                            backendPath = Path.GetFullPath(p);
+                            break;
+                        }
+                    }
+
+                    if (backendPath != null)
+                    {
+                        try
+                        {
+                            ProcessStartInfo uvicornPsi = new ProcessStartInfo();
+                            uvicornPsi.FileName = "cmd.exe";
+                            uvicornPsi.Arguments = "/c python -m uvicorn main:app --host 127.0.0.1 --port 8000";
+                            uvicornPsi.WorkingDirectory = backendPath;
+                            uvicornPsi.CreateNoWindow = true;
+                            uvicornPsi.UseShellExecute = false;
+                            uvicornPsi.WindowStyle = ProcessWindowStyle.Hidden;
+                            Process.Start(uvicornPsi);
+
+                            // Wait up to 3 seconds for server to bind
+                            for (int i = 0; i < 6; i++)
+                            {
+                                Thread.Sleep(500);
+                                if (IsUrlAvailable("http://127.0.0.1:8000/studio"))
+                                {
+                                    targetUrl = "http://127.0.0.1:8000/studio";
+                                    break;
+                                }
+                            }
+                        }
+                        catch { }
                     }
                 }
-                catch
+
+                // 4. Fallback to cloud studio if local engine unavailable
+                if (string.IsNullOrEmpty(targetUrl))
                 {
-                    // Fallback to live web studio
+                    targetUrl = "https://01talha-arqa-chatbot.hf.space/studio";
                 }
 
-                // Look for Edge or Chrome for dedicated App Mode window (no browser tabs / address bar)
+                // 5. Launch dedicated App Mode window (No browser address bar or tabs)
                 string edgePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), @"Microsoft\Edge\Application\msedge.exe");
                 if (!File.Exists(edgePath))
                     edgePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), @"Microsoft\Edge\Application\msedge.exe");
@@ -61,6 +110,24 @@ namespace FlowCreatorStudio
             catch (Exception ex)
             {
                 MessageBox.Show("Could not launch FlowCreator Studio: " + ex.Message, "FlowCreator Studio Pro", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        static bool IsUrlAvailable(string url)
+        {
+            try
+            {
+                var req = (System.Net.HttpWebRequest)System.Net.WebRequest.Create(url);
+                req.Timeout = 900;
+                req.Method = "GET";
+                using (var resp = (System.Net.HttpWebResponse)req.GetResponse())
+                {
+                    return resp.StatusCode == System.Net.HttpStatusCode.OK;
+                }
+            }
+            catch
+            {
+                return false;
             }
         }
     }
