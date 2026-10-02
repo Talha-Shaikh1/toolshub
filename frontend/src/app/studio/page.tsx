@@ -823,17 +823,41 @@ export default function StudioPage() {
         const xhr = new XMLHttpRequest();
         xhr.open("POST", `${activeApi}/api/render`);
 
+        xhr.timeout = 600000; // 10 minutes timeout for high-bitrate video uploads
+
         xhr.upload.onprogress = (e) => {
           if (e.lengthComputable) {
             const uploadPct = Math.round((e.loaded / e.total) * 100);
-            // Map upload 0-100% to progress bar 0-25%
-            setRenderProgress(Math.min(25, Math.round(uploadPct * 0.25)));
-            setRenderStep(`Uploading to cloud: ${uploadPct}% (${((e.loaded) / (1024 * 1024)).toFixed(1)}MB / ${((e.total) / (1024 * 1024)).toFixed(1)}MB)`);
-            toast.loading(`Uploading to cloud (${uploadPct}%)...`, {
-              id: toastId,
-              description: `Uploaded ${((e.loaded) / (1024 * 1024)).toFixed(1)}MB of ${((e.total) / (1024 * 1024)).toFixed(1)}MB`
-            });
+            if (uploadPct >= 100) {
+              setRenderProgress(25);
+              setRenderStep("Video transferred! Server is saving 194MB to disk & starting FFmpeg queue...");
+              toast.loading("Video Transferred! Processing... ⏳", {
+                id: toastId,
+                description: `Received 100% (${((e.total) / (1024 * 1024)).toFixed(1)}MB). Writing to disk & initializing FFmpeg...`
+              });
+            } else {
+              // Map upload 0-100% to progress bar 0-25%
+              setRenderProgress(Math.min(24, Math.round(uploadPct * 0.25)));
+              setRenderStep(`Uploading to cloud: ${uploadPct}% (${((e.loaded) / (1024 * 1024)).toFixed(1)}MB / ${((e.total) / (1024 * 1024)).toFixed(1)}MB)`);
+              toast.loading(`Uploading to cloud (${uploadPct}%)...`, {
+                id: toastId,
+                description: `Uploaded ${((e.loaded) / (1024 * 1024)).toFixed(1)}MB of ${((e.total) / (1024 * 1024)).toFixed(1)}MB`
+              });
+            }
           }
+        };
+
+        xhr.upload.onload = () => {
+          setRenderProgress(25);
+          setRenderStep("Video transferred! Server is saving file & allocating FFmpeg worker...");
+          toast.loading("Video Transferred! Initializing Engine... ⚙️", {
+            id: toastId,
+            description: "Data received by server. Writing to disk and starting render engine..."
+          });
+        };
+
+        xhr.ontimeout = () => {
+          reject(new Error("Video upload timed out. Please check your internet connection and retry."));
         };
 
         xhr.onload = () => {
@@ -1831,7 +1855,7 @@ export default function StudioPage() {
               )}
 
               {/* Floating CTA Banner on Video Canvas */}
-              {videoPreview && wordsList.length === 0 && (
+              {videoPreview && wordsList.length === 0 && !isRendering && (
                 <div className="absolute top-3 left-1/2 -translate-x-1/2 z-40 bg-slate-950/90 backdrop-blur-md border border-amber-500/60 py-1.5 px-3 rounded-full flex items-center gap-2.5 shadow-2xl shadow-black">
                   <span className="text-[10px] font-semibold text-white whitespace-nowrap hidden sm:inline">
                     Video loaded!
@@ -1857,6 +1881,41 @@ export default function StudioPage() {
                       </>
                     )}
                   </button>
+                </div>
+              )}
+
+              {/* PROMINENT CLOUD RENDER PROGRESS MODAL OVERLAY */}
+              {isRendering && (
+                <div className="absolute inset-0 z-50 bg-black/85 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center animate-in fade-in duration-200">
+                  <div className="relative mb-3">
+                    <div className="w-14 h-14 rounded-full border-4 border-amber-500/20 border-t-amber-500 animate-spin flex items-center justify-center" />
+                    <Sparkles className="h-5 w-5 text-amber-400 absolute inset-0 m-auto animate-pulse" />
+                  </div>
+
+                  <span className="text-[10px] uppercase tracking-widest font-mono text-amber-400 mb-1 font-bold">
+                    Cloud Video Export (Full HD)
+                  </span>
+
+                  <h4 className="text-sm font-extrabold text-white mb-2 max-w-xs leading-snug">
+                    {renderStep || "Processing Video..."}
+                  </h4>
+
+                  {/* Progress Bar */}
+                  <div className="w-64 max-w-full bg-slate-900 rounded-full h-2 mb-1.5 overflow-hidden border border-slate-800">
+                    <div
+                      className="bg-gradient-to-r from-amber-500 via-amber-400 to-orange-500 h-full rounded-full transition-all duration-300"
+                      style={{ width: `${Math.max(6, renderProgress)}%` }}
+                    />
+                  </div>
+
+                  <div className="flex justify-between w-64 max-w-full text-[10px] font-mono text-slate-400 mb-3">
+                    <span>Export Progress</span>
+                    <span className="text-amber-400 font-bold">{renderProgress}%</span>
+                  </div>
+
+                  <p className="text-[10px] text-slate-400 max-w-xs leading-relaxed">
+                    Preserving 100% original camera resolution &amp; CRF 18 visually lossless sharpness.
+                  </p>
                 </div>
               )}
 
