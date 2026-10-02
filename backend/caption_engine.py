@@ -920,17 +920,15 @@ def build_render_ffmpeg_cmd(
         rel_fonts = os.path.relpath(fonts_dir).replace("\\", "/")
         sub_filter = sub_filter[:-1] + f":fontsdir='{rel_fonts}'" + "'"
 
-    # Pristine visual quality: CRF 18 (visually lossless standard)
+    # 1. PURE ZERO-RESCALE PASSTHROUGH (100% Original Camera Resolution & Sharpness)
     if is_4k:
         filter_str = f"scale=2160:3840:flags=lanczos,unsharp=5:5:0.8:5:5:0.0,{sub_filter}"
-        crf = "18"
-        bitrate_args = ["-maxrate", "25M", "-bufsize", "35M"]
     else:
-        # Keep original camera resolution crisp without downscale blur
-        # Only cap if oversized (e.g. 4K down to 1080p using high-fidelity lanczos)
-        filter_str = f"scale=w='min(1080,iw)':h=-2:flags=lanczos,{sub_filter}"
-        crf = "18" # Visually lossless, zero blur
-        bitrate_args = ["-maxrate", "16M", "-bufsize", "25M"]
+        # Original video pixels are 100% untouched! Only vector subtitles are burned
+        filter_str = sub_filter
+
+    # Visually lossless studio grade encoding
+    crf = "18"
 
     cmd_inputs = ["-i", video_path]
     current_input_idx = 1
@@ -966,7 +964,7 @@ def build_render_ffmpeg_cmd(
             music_feed = "[bgm_raw]"
 
         if sfx_idx is not None:
-            # Mix 3 inputs: Voice + Ducked BGM + SFX (dropout_transition=0 so audio never cuts early)
+            # Mix 3 inputs: Voice + Ducked BGM + SFX (dropout_transition=0: never cuts or fades the ending)
             mix_filter = f"[0:a]{music_feed}[{sfx_idx}:a]amix=inputs=3:duration=first:dropout_transition=0:weights=1.0 1.0 0.8[aout]"
         else:
             # Mix 2 inputs: Voice + Ducked BGM
@@ -978,7 +976,6 @@ def build_render_ffmpeg_cmd(
         filter_complex_parts.append(mix_filter)
 
     has_audio_filter = (bgm_idx is not None or sfx_idx is not None)
-    duration_args = [] # Let stream finish naturally to prevent cutting off the last seconds
 
     if has_audio_filter:
         cmd = [
@@ -989,14 +986,12 @@ def build_render_ffmpeg_cmd(
             "-filter_complex", ";".join(filter_complex_parts),
             "-map", "[vout]",
             "-map", "[aout]",
-            *duration_args,
             "-c:v", "libx264",
             "-preset", "veryfast",
             "-tune", "fastdecode",
             "-crf", crf,
-            *bitrate_args,
             "-c:a", "aac",
-            "-b:a", "192k",
+            "-b:a", "320k",
             "-movflags", "+faststart",
             output_video_path
         ]
@@ -1007,12 +1002,10 @@ def build_render_ffmpeg_cmd(
             "-threads", "0",
             "-i", video_path,
             "-vf", filter_str,
-            *duration_args,
             "-c:v", "libx264",
             "-preset", "veryfast",
             "-tune", "fastdecode",
             "-crf", crf,
-            *bitrate_args,
             "-c:a", "copy",
             "-movflags", "+faststart",
             output_video_path

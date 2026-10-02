@@ -1053,7 +1053,8 @@ export default function StudioPage() {
             )}
           </button>
 
-          {/* 2. Secondary: Device Local Render */}
+          {/* Secondary Device Local Render commented out for future WebCodecs integration */}
+          {/*
           <button
             onClick={handleClientSideRender}
             disabled={isRendering || !videoFile}
@@ -1063,6 +1064,7 @@ export default function StudioPage() {
             <Zap className="h-3 w-3 text-amber-400" />
             <span>⚡ Device</span>
           </button>
+          */}
         </div>
       </header>
 
