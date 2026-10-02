@@ -8,6 +8,7 @@ import {
   transcribeWithGroqDirect,
   formatWordsToEditableText
 } from "@/lib/audioExtractor";
+import { renderCaptionedVideoClientSide } from "@/lib/clientRenderer";
 import {
   Video,
   Sparkles,
@@ -681,7 +682,81 @@ export default function StudioPage() {
     }
   };
 
-  // Full Video Render
+  // 1. FAST CLIENT-SIDE EXPORT (Zero-Upload Instant GPU Render)
+  const handleClientSideRender = async () => {
+    if (!videoFile) {
+      toast.error("No Video Found", { description: "Please upload or drop a video file first." });
+      return;
+    }
+    if (!wordsList || wordsList.length === 0) {
+      toast.error("No Captions Found", { description: "Please click 'Generate AI Captions' first." });
+      return;
+    }
+
+    setIsRendering(true);
+    setErrorMessage(null);
+    setRenderProgress(5);
+    setRenderStep("Initializing local GPU video canvas...");
+    const toastId = "export-reel";
+    toast.loading("⚡ Fast Device Export Starting...", {
+      id: toastId,
+      description: "0s upload • Rendering directly on your device with GPU."
+    });
+
+    try {
+      const result = await renderCaptionedVideoClientSide(
+        videoFile,
+        wordsList,
+        {
+          styleName,
+          fontChoice,
+          fontSize,
+          position,
+          wordsPerChunk,
+          enableEmojis,
+          activeStyle,
+          customFontFamily,
+          playbackRate: 1.5
+        },
+        (pct, step) => {
+          setRenderProgress(pct);
+          setRenderStep(step);
+          toast.loading(`⚡ Fast Device Export (${pct}%)...`, {
+            id: toastId,
+            description: step
+          });
+        }
+      );
+
+      const blobUrl = URL.createObjectURL(result.blob);
+      setExportedVideoUrl(blobUrl);
+      setRenderProgress(100);
+      setRenderStep("Export complete!");
+
+      // Auto-trigger download
+      const ext = result.mimeType.includes("mp4") ? "mp4" : "webm";
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = `${videoFile.name.replace(/\.[^/.]+$/, "")}_captioned.${ext}`;
+      a.click();
+
+      toast.success("Viral Reel Exported & Downloaded! 🎉", {
+        id: toastId,
+        description: `Exported directly on your device in ~30s without slow cloud uploads!`
+      });
+    } catch (err: any) {
+      console.warn("Client-side render error, fallback available:", err);
+      toast.error("Device Export Failed", {
+        id: toastId,
+        description: `${err?.message || "Browser canvas recording error"}. You can also use Cloud Export.`
+      });
+      setErrorMessage(err?.message || "Client-side export failed");
+    } finally {
+      setIsRendering(false);
+    }
+  };
+
+  // Full Video Render (Cloud Server FFmpeg)
   const handleRenderVideo = async () => {
     if (!videoFile) {
       setErrorMessage("Please upload a video file first");
@@ -903,23 +978,34 @@ export default function StudioPage() {
             <span className="sm:hidden">.SRT</span>
           </button>
 
-          {/* 2. Export Final MP4 */}
+          {/* 2. Fast Device Export (Zero-Upload Instant GPU Render) */}
           <button
-            onClick={handleRenderVideo}
+            onClick={handleClientSideRender}
             disabled={isRendering || !videoFile}
             className="h-8 px-3.5 rounded-md bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black font-extrabold text-xs flex items-center gap-1.5 shadow-sm active:scale-95 disabled:opacity-40 transition-all cursor-pointer"
+            title="Fast Device Export: 0s upload, renders directly on your device with GPU in ~30s"
           >
             {isRendering ? (
               <>
-                <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                <span>Exporting...</span>
+                <RefreshCw className="h-3.5 w-3.5 animate-spin text-black" />
+                <span>Exporting ({renderProgress}%)...</span>
               </>
             ) : (
               <>
-                <Sparkles className="h-3.5 w-3.5 text-black" />
-                <span>Export Reel</span>
+                <Zap className="h-3.5 w-3.5 text-black fill-current" />
+                <span>⚡ Fast Export (~30s)</span>
               </>
             )}
+          </button>
+
+          {/* 3. Cloud Server Export (Optional Fallback) */}
+          <button
+            onClick={handleRenderVideo}
+            disabled={isRendering || !videoFile}
+            className="h-8 px-2.5 rounded-md bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-white font-medium text-xs flex items-center gap-1 transition-all cursor-pointer hidden md:flex"
+            title="Cloud Server Export (FFmpeg Cloud Backend)"
+          >
+            <span>☁️ Cloud</span>
           </button>
         </div>
       </header>
