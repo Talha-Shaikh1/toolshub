@@ -13,6 +13,9 @@ jobs:
     name: Build & Package Android APK
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: write
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -30,8 +33,12 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Configure Android SDK Environment
+        run: |
+          echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=/usr/local/lib/android/sdk" >> $GITHUB_ENV
+          echo "/usr/local/lib/android/sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
+          echo "/usr/local/lib/android/sdk/platform-tools" >> $GITHUB_PATH
 
       - name: Install Frontend Dependencies
         working-directory: frontend
@@ -56,9 +63,30 @@ jobs:
           chmod +x ./gradlew
           ./gradlew assembleDebug --stacktrace
 
+      - name: Rename APK for Distribution
+        run: |
+          mkdir -p dist-apk
+          cp frontend/android/app/build/outputs/apk/debug/*.apk dist-apk/FlowCreator-Studio.apk
+
       - name: Upload Android APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: FlowCreator-Studio-Android-APK
-          path: frontend/android/app/build/outputs/apk/debug/*.apk
-          retention-days: 14
+          path: dist-apk/FlowCreator-Studio.apk
+          retention-days: 30
+
+      - name: Publish Direct Release APK
+        uses: softprops/action-gh-release@v2
+        if: github.ref == 'refs/heads/main'
+        with:
+          tag_name: v1.0.0-apk
+          name: "FlowCreator Studio Pro - Android APK (v1.0.0)"
+          body: |
+            ## 📱 FlowCreator Studio Pro Mobile (Android APK)
+            1-Click CapCut-style AI Reels & Captions creation for Android smartphones.
+            
+            ### 📥 Download & Install:
+            Download **`FlowCreator-Studio.apk`** below and tap to install on your Android device.
+          files: dist-apk/FlowCreator-Studio.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
