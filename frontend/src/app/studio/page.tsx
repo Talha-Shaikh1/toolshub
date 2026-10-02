@@ -315,6 +315,9 @@ export default function StudioPage() {
   const [cloudShareUrl, setCloudShareUrl] = useState<string | null>(null);
   const [isDraggingOver, setIsDraggingOver] = useState<boolean>(false);
   const bgUploadXhrRef = useRef<XMLHttpRequest | null>(null);
+  const uploadedVideoIdRef = useRef<string | null>(null);
+  const isBgUploadingRef = useRef<boolean>(false);
+  const bgUploadPromiseRef = useRef<Promise<string> | null>(null);
 
   // Settings Modal
   const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
@@ -373,55 +376,69 @@ export default function StudioPage() {
     }
 
     setIsBgUploading(true);
+    isBgUploadingRef.current = true;
     setBgUploadProgress(0);
     setBgUploadDone(false);
     setUploadedVideoId(null);
+    uploadedVideoIdRef.current = null;
     setCloudShareUrl(null);
 
     const formData = new FormData();
     formData.append("file", file);
 
-    const xhr = new XMLHttpRequest();
-    bgUploadXhrRef.current = xhr;
-    xhr.open("POST", `${apiUrl}/api/upload-raw`);
-    xhr.timeout = 600000; // 10 minutes
+    const uploadPromise = new Promise<string>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      bgUploadXhrRef.current = xhr;
+      xhr.open("POST", `${apiUrl}/api/upload-raw`);
+      xhr.timeout = 600000; // 10 minutes
 
-    xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable) {
-        const pct = Math.round((e.loaded / e.total) * 100);
-        setBgUploadProgress(pct);
-      }
-    };
-
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        try {
-          const res = JSON.parse(xhr.responseText);
-          if (res.video_id) {
-            setUploadedVideoId(res.video_id);
-            setBgUploadDone(true);
-            setIsBgUploading(false);
-            toast.success("Cloud Synced (Zero-Wait Ready) ⚡", {
-              description: `Video cached silently (${res.size_mb || (file.size / (1024*1024)).toFixed(1)} MB). Fast Export will now take 0s upload wait!`
-            });
-          }
-        } catch {
-          setIsBgUploading(false);
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          const pct = Math.round((e.loaded / e.total) * 100);
+          setBgUploadProgress(pct);
         }
-      } else {
+      };
+
+      xhr.onload = () => {
+        isBgUploadingRef.current = false;
         setIsBgUploading(false);
-      }
-    };
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const res = JSON.parse(xhr.responseText);
+            if (res.video_id) {
+              setUploadedVideoId(res.video_id);
+              uploadedVideoIdRef.current = res.video_id;
+              setBgUploadDone(true);
+              toast.success("Cloud Synced (Zero-Wait Ready) ⚡", {
+                description: `Video cached silently (${res.size_mb || (file.size / (1024*1024)).toFixed(1)} MB). Fast Export will now take 0s upload wait!`
+              });
+              resolve(res.video_id);
+              return;
+            }
+          } catch (parseErr) {
+            reject(parseErr);
+          }
+        }
+        reject(new Error(`Background upload ended with status ${xhr.status}`));
+      };
 
-    xhr.onerror = () => {
-      setIsBgUploading(false);
-    };
+      xhr.onerror = () => {
+        isBgUploadingRef.current = false;
+        setIsBgUploading(false);
+        reject(new Error("Network error during background upload."));
+      };
 
-    xhr.ontimeout = () => {
-      setIsBgUploading(false);
-    };
+      xhr.ontimeout = () => {
+        isBgUploadingRef.current = false;
+        setIsBgUploading(false);
+        reject(new Error("Background upload timed out."));
+      };
 
-    xhr.send(formData);
+      xhr.send(formData);
+    });
+
+    bgUploadPromiseRef.current = uploadPromise;
+    uploadPromise.catch(() => {});
   };
 
   // Unified File Processing (Used by Input File Picker & Drag-and-Drop)
@@ -899,20 +916,21 @@ export default function StudioPage() {
     try {
       let activeApi = apiUrl;
       let jobId: string | null = null;
-      let currentVideoId = uploadedVideoId;
+      let currentVideoId = uploadedVideoIdRef.current || uploadedVideoId;
 
-      // If silent background upload is still completing, wait for it so we don't upload 200MB again!
-      if (!currentVideoId && isBgUploading) {
-        setRenderStep("Finalizing silent cloud upload...");
-        toast.loading(`Finalizing background sync (${bgUploadProgress}%)...`, {
+      // If silent background upload is still completing, await the promise so we NEVER upload 200MB again!
+      if (!currentVideoId && isBgUploadingRef.current && bgUploadPromiseRef.current) {
+        setRenderStep("Finalizing background upload (almost done)...");
+        toast.loading("Finalizing background upload...", {
           id: toastId,
-          description: "Video is almost uploaded. Export will start with 0s wait time!"
+          description: "Video is almost finished uploading. Waiting a few seconds for completion to avoid 200MB re-upload!"
         });
 
-        const startWait = Date.now();
-        while (isBgUploading && !uploadedVideoId && Date.now() - startWait < 45000) {
-          await new Promise((r) => setTimeout(r, 400));
-          currentVideoId = uploadedVideoId;
+        try {
+          currentVideoId = await bgUploadPromiseRef.current;
+        } catch (waitErr) {
+          console.warn("Background upload await failed, falling back to direct upload:", waitErr);
+          currentVideoId = null;
         }
       }
 
