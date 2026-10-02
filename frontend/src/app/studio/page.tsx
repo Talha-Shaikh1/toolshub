@@ -716,7 +716,7 @@ export default function StudioPage() {
           enableEmojis,
           activeStyle,
           customFontFamily,
-          playbackRate: 1.5
+          playbackRate: 1.0
         },
         (pct, step) => {
           setRenderProgress(pct);

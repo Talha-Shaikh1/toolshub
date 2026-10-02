@@ -50,7 +50,7 @@ export function renderCaptionedVideoClientSide(
     video.playsInline = true;
     video.crossOrigin = "anonymous";
 
-    const playbackSpeed = options.playbackRate || 1.5; // 1.5x speed renders 57s in ~38s
+    const playbackSpeed = 1.0; // Strictly 1.0x to preserve 100% natural duration, audio pitch & word sync
 
     let cleanup = () => {
       try {
