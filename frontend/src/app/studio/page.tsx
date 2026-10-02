@@ -872,7 +872,11 @@ export default function StudioPage() {
             try {
               const parsed = JSON.parse(xhr.responseText);
               if (parsed.detail) errorText = parsed.detail;
-            } catch {}
+            } catch {
+              if (xhr.status === 500 || xhr.status === 503 || errorText.includes("<!DOCTYPE") || errorText.includes("<html")) {
+                errorText = `Cloud server was updating (HTTP ${xhr.status}). Server is now online. Please click Export Reel again.`;
+              }
+            }
             reject(new Error(errorText || `Upload failed with HTTP ${xhr.status}`));
           }
         };
@@ -952,7 +956,9 @@ export default function StudioPage() {
     } catch (err: any) {
       const rawMsg = err.message || "";
       let friendlyMsg = rawMsg;
-      if (rawMsg.includes("Failed to fetch") || rawMsg.includes("NetworkError") || rawMsg.includes("Load failed")) {
+      if (rawMsg.includes("<!DOCTYPE") || rawMsg.includes("<html") || rawMsg.includes("500") || rawMsg.includes("503")) {
+        friendlyMsg = "Cloud server was restarting with latest update. Server is now online. Please click Export Reel again.";
+      } else if (rawMsg.includes("Failed to fetch") || rawMsg.includes("NetworkError") || rawMsg.includes("Load failed")) {
         friendlyMsg = "Cannot connect to backend server. Hugging Face Space may be waking up. Please retry in ~30s.";
       }
       setErrorMessage(friendlyMsg);
