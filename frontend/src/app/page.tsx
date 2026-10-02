@@ -31,6 +31,7 @@ import {
 export default function Home() {
   const [openFaq, setOpenFaq] = useState<number | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
+  const [downloadModalOpen, setDownloadModalOpen] = useState<boolean>(false);
 
   const toggleFaq = (index: number) => {
     setOpenFaq(openFaq === index ? null : index);
@@ -60,6 +61,9 @@ export default function Home() {
           <a href="#tools" className="hover:text-amber-400 transition-colors">
             Tools Suite
           </a>
+          <a href="#apps" className="hover:text-amber-400 transition-colors">
+            Apps &amp; GPU
+          </a>
           <a href="#workflow" className="hover:text-amber-400 transition-colors">
             How It Works
           </a>
@@ -73,6 +77,15 @@ export default function Home() {
 
         {/* Header Action Button & Mobile Menu Toggle */}
         <div className="flex items-center gap-2 sm:gap-3">
+          <button
+            onClick={() => setDownloadModalOpen(true)}
+            className="h-8 sm:h-9 px-3 sm:px-3.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700/80 hover:border-amber-500/50 text-amber-400 hover:text-white font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer shadow-sm"
+          >
+            <Download className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">Get App (APK / PC)</span>
+            <span className="sm:hidden">App</span>
+          </button>
+
           <Link
             href="/studio"
             className="h-8 sm:h-9 px-3 sm:px-4 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black font-extrabold text-xs flex items-center gap-1.5 shadow-md shadow-amber-500/20 active:scale-95 transition-all"
@@ -191,22 +204,30 @@ export default function Home() {
         </p>
 
         {/* Dual Primary Call-to-Actions */}
-        <div className="flex flex-col sm:flex-row items-center gap-4 mb-16 w-full sm:w-auto">
+        <div className="flex flex-col sm:flex-row items-center gap-3 sm:gap-4 mb-16 w-full sm:w-auto">
           <Link
             href="/studio"
-            className="w-full sm:w-auto h-12 px-8 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black font-black text-sm flex items-center justify-center gap-2 shadow-xl shadow-amber-500/25 active:scale-95 transition-all group"
+            className="w-full sm:w-auto h-12 px-7 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black font-black text-sm flex items-center justify-center gap-2 shadow-xl shadow-amber-500/25 active:scale-95 transition-all group cursor-pointer"
           >
             <Video className="h-4 w-4 text-black group-hover:scale-110 transition-transform" />
-            <span>Open Reel Caption Studio</span>
+            <span>Launch Web Studio (Instant)</span>
             <ArrowRight className="h-4 w-4 ml-1 group-hover:translate-x-1 transition-transform" />
           </Link>
 
+          <button
+            onClick={() => setDownloadModalOpen(true)}
+            className="w-full sm:w-auto h-12 px-6 rounded-xl bg-slate-900 hover:bg-slate-800 text-amber-400 hover:text-white font-bold text-sm border border-amber-500/40 hover:border-amber-500 flex items-center justify-center gap-2 shadow-lg shadow-black/50 active:scale-95 transition-all cursor-pointer"
+          >
+            <Download className="h-4 w-4 text-amber-400" />
+            <span>Download App (Android / Windows)</span>
+          </button>
+
           <Link
             href="/upscaler"
-            className="w-full sm:w-auto h-12 px-8 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-sm border border-slate-700/80 hover:border-amber-500/50 flex items-center justify-center gap-2 active:scale-95 transition-all"
+            className="w-full sm:w-auto h-12 px-6 rounded-xl bg-slate-950/80 hover:bg-slate-900 text-slate-300 hover:text-white font-semibold text-sm border border-slate-800 hover:border-slate-700 flex items-center justify-center gap-2 active:scale-95 transition-all"
           >
             <Sparkles className="h-4 w-4 text-amber-400" />
-            <span>Try 4K/8K Super-Resolution</span>
+            <span>4K/8K Upscaler</span>
           </Link>
         </div>
 
@@ -575,6 +596,142 @@ export default function Home() {
         </div>
       </section>
 
+      {/* 4.5 APPS & HARDWARE GPU PLATFORMS */}
+      <section id="apps" className="py-20 px-6 lg:px-12 max-w-6xl mx-auto w-full border-t border-slate-800/80">
+        <div className="text-center space-y-2 mb-12">
+          <span className="text-xs font-mono text-amber-400 tracking-wider uppercase bg-amber-500/10 px-3 py-1 rounded-full border border-amber-500/20">
+            Cross-Platform Ecosystem
+          </span>
+          <h2 className="text-3xl sm:text-4xl font-black text-white">
+            Available Everywhere: Web, Mobile &amp; Desktop
+          </h2>
+          <p className="text-xs sm:text-sm text-slate-400 max-w-xl mx-auto">
+            Choose how you want to create — cloud-powered in any browser, on-the-go on Android, or with 100% native GPU acceleration on your PC.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {/* Card 1: Instant Web Studio */}
+          <div className="p-6 rounded-2xl bg-[#0D111D] border border-slate-800 hover:border-amber-500/40 transition-all flex flex-col justify-between group">
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="h-10 w-10 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400">
+                  <Monitor className="h-5 w-5" />
+                </div>
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold">
+                  Zero Install
+                </span>
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white mb-1">Web Cloud Studio</h3>
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  Run directly in Chrome, Safari, or Edge. Uses Groq Whisper Large-v3 Turbo for 1s subtitles and cloud FFmpeg 60fps rendering.
+                </p>
+              </div>
+              <ul className="space-y-1.5 text-xs text-slate-300 pt-2 border-t border-slate-800/80">
+                <li className="flex items-center gap-1.5">
+                  <Check className="h-3.5 w-3.5 text-emerald-400" />
+                  <span>Works on PC, Mac, iPad &amp; Phone</span>
+                </li>
+                <li className="flex items-center gap-1.5">
+                  <Check className="h-3.5 w-3.5 text-emerald-400" />
+                  <span>Submagic 0s-wait silent upload</span>
+                </li>
+              </ul>
+            </div>
+            <div className="pt-6">
+              <Link
+                href="/studio"
+                className="w-full py-2.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-amber-300 font-bold text-xs flex items-center justify-center gap-2 transition-all"
+              >
+                <span>Launch in Browser</span>
+                <ArrowRight className="h-3.5 w-3.5" />
+              </Link>
+            </div>
+          </div>
+
+          {/* Card 2: Android APK Mobile App */}
+          <div className="p-6 rounded-2xl bg-[#0D111D] border border-amber-500/30 hover:border-amber-500/60 transition-all flex flex-col justify-between group relative overflow-hidden shadow-lg shadow-amber-500/5">
+            <div className="absolute top-0 right-0 p-4 pointer-events-none">
+              <span className="text-[9px] font-mono px-2 py-0.5 rounded-full bg-gradient-to-r from-amber-500 to-orange-500 text-black font-black uppercase">
+                Trending
+              </span>
+            </div>
+            <div className="space-y-4">
+              <div className="h-10 w-10 rounded-xl bg-orange-500/10 border border-orange-500/20 flex items-center justify-center text-orange-400">
+                <Smartphone className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white mb-1">Android Mobile APK</h3>
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  CapCut-style mobile creator workflow. Drop camera reels straight from your gallery, auto-sync viral captions, and post directly to TikTok and Reels.
+                </p>
+              </div>
+              <ul className="space-y-1.5 text-xs text-slate-300 pt-2 border-t border-slate-800/80">
+                <li className="flex items-center gap-1.5">
+                  <Check className="h-3.5 w-3.5 text-emerald-400" />
+                  <span>100% Free APK • No Play Store needed</span>
+                </li>
+                <li className="flex items-center gap-1.5">
+                  <Check className="h-3.5 w-3.5 text-emerald-400" />
+                  <span>Automated GitHub Cloud Builder</span>
+                </li>
+              </ul>
+            </div>
+            <div className="pt-6">
+              <button
+                type="button"
+                onClick={() => setDownloadModalOpen(true)}
+                className="w-full py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black font-extrabold text-xs flex items-center justify-center gap-2 shadow-md active:scale-95 transition-all cursor-pointer"
+              >
+                <Download className="h-3.5 w-3.5 text-black" />
+                <span>Get Android APK</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Card 3: Windows Desktop App (Hardware GPU) */}
+          <div className="p-6 rounded-2xl bg-[#0D111D] border border-slate-800 hover:border-blue-500/40 transition-all flex flex-col justify-between group">
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="h-10 w-10 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400">
+                  <Cpu className="h-5 w-5" />
+                </div>
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 font-bold">
+                  ⚡ Local GPU Power
+                </span>
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white mb-1">Windows Desktop GPU App</h3>
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  Export 200MB 2K/4K reels in seconds using your local PC GPU (NVIDIA NVENC, Intel QuickSync, or AMD AMF). 0 MB uploaded to cloud!
+                </p>
+              </div>
+              <ul className="space-y-1.5 text-xs text-slate-300 pt-2 border-t border-slate-800/80">
+                <li className="flex items-center gap-1.5">
+                  <Check className="h-3.5 w-3.5 text-emerald-400" />
+                  <span>0 MB Cloud Upload • 100% Private</span>
+                </li>
+                <li className="flex items-center gap-1.5">
+                  <Check className="h-3.5 w-3.5 text-emerald-400" />
+                  <span>1-Click Desktop Shortcut Launcher</span>
+                </li>
+              </ul>
+            </div>
+            <div className="pt-6">
+              <button
+                type="button"
+                onClick={() => setDownloadModalOpen(true)}
+                className="w-full py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-white font-bold text-xs flex items-center justify-center gap-2 active:scale-95 transition-all cursor-pointer"
+              >
+                <Monitor className="h-3.5 w-3.5 text-blue-400" />
+                <span>Launch Desktop App</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
       {/* 5. SEARCH ENGINE & AEO KNOWLEDGE BASE (FAQ) */}
       <section id="faq" className="py-20 px-6 lg:px-12 max-w-4xl mx-auto w-full">
         <div className="text-center space-y-2 mb-12">
@@ -676,6 +833,124 @@ export default function Home() {
           </p>
         </div>
       </footer>
+
+      {/* 7. DOWNLOAD APPS & PLATFORMS MODAL */}
+      {downloadModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-[#0C101A] border border-slate-800 rounded-2xl max-w-xl w-full p-5 sm:p-6 space-y-5 shadow-2xl relative">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="h-9 w-9 rounded-xl bg-gradient-to-tr from-amber-500 to-orange-500 flex items-center justify-center text-black font-black">
+                  <Download className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Download FlowCreator Studio</h3>
+                  <p className="text-[11px] text-slate-400 font-mono">Choose your platform for zero-wait creation</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setDownloadModalOpen(false)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-all cursor-pointer"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3.5">
+              {/* Option 1: Android APK */}
+              <div className="p-4 rounded-xl bg-slate-950/70 border border-slate-800 hover:border-amber-500/40 transition-all flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  <div className="h-9 w-9 rounded-lg bg-orange-500/10 border border-orange-500/30 flex items-center justify-center text-orange-400 shrink-0">
+                    <Smartphone className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
+                      <span>Android Mobile App (.APK)</span>
+                      <span className="text-[9px] bg-emerald-500/10 text-emerald-400 px-1.5 py-0.2 rounded font-mono">100% Free</span>
+                    </h4>
+                    <p className="text-[11px] text-slate-400 leading-snug">
+                      Automated GitHub cloud build. No 10GB Android Studio required!
+                    </p>
+                  </div>
+                </div>
+                <a
+                  href="https://github.com/Talha-Shaikh1/toolshub/actions"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="w-full sm:w-auto px-4 py-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black font-extrabold text-xs flex items-center justify-center gap-1.5 shadow-md active:scale-95 shrink-0"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  <span>Get APK</span>
+                </a>
+              </div>
+
+              {/* Option 2: Windows Desktop GPU */}
+              <div className="p-4 rounded-xl bg-slate-950/70 border border-slate-800 hover:border-blue-500/40 transition-all flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  <div className="h-9 w-9 rounded-lg bg-blue-500/10 border border-blue-500/30 flex items-center justify-center text-blue-400 shrink-0">
+                    <Cpu className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
+                      <span>Windows Desktop App (GPU)</span>
+                      <span className="text-[9px] bg-blue-500/10 text-blue-400 px-1.5 py-0.2 rounded font-mono">0 MB Cloud</span>
+                    </h4>
+                    <p className="text-[11px] text-slate-400 leading-snug">
+                      Uses Intel QSV / NVIDIA NVENC / AMD AMF. Double-click desktop shortcut!
+                    </p>
+                  </div>
+                </div>
+                <a
+                  href="https://github.com/Talha-Shaikh1/toolshub"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="w-full sm:w-auto px-4 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 active:scale-95 shrink-0"
+                >
+                  <Monitor className="h-3.5 w-3.5 text-blue-400" />
+                  <span>Desktop Guide</span>
+                </a>
+              </div>
+
+              {/* Option 3: Instant Browser */}
+              <div className="p-4 rounded-xl bg-slate-950/70 border border-slate-800 hover:border-emerald-500/40 transition-all flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  <div className="h-9 w-9 rounded-lg bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
+                    <Monitor className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
+                      <span>Instant Web Studio</span>
+                      <span className="text-[9px] bg-emerald-500/10 text-emerald-400 px-1.5 py-0.2 rounded font-mono">Online Now</span>
+                    </h4>
+                    <p className="text-[11px] text-slate-400 leading-snug">
+                      Direct browser creation with Hugging Face Space cloud engine.
+                    </p>
+                  </div>
+                </div>
+                <Link
+                  href="/studio"
+                  onClick={() => setDownloadModalOpen(false)}
+                  className="w-full sm:w-auto px-4 py-2 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/40 text-emerald-300 font-bold text-xs flex items-center justify-center gap-1.5 active:scale-95 shrink-0"
+                >
+                  <ArrowRight className="h-3.5 w-3.5" />
+                  <span>Open Web</span>
+                </Link>
+              </div>
+            </div>
+
+            <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-400">
+              <span>All versions are 100% Free &amp; Open Source</span>
+              <button
+                type="button"
+                onClick={() => setDownloadModalOpen(false)}
+                className="text-slate-400 hover:text-white cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
