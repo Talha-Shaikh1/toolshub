@@ -240,6 +240,7 @@ const DEFAULT_API_URL = (process.env.NEXT_PUBLIC_API_URL && !process.env.NEXT_PU
 
 export default function StudioPage() {
   const [leftNav, setLeftNav] = useState<"style" | "font" | "magic" | "audio" | "script">("style");
+  const [mobileTab, setMobileTab] = useState<"canvas" | "controls">("canvas");
   const [apiUrl, setApiUrl] = useState<string>(DEFAULT_API_URL);
   const [apiOnline, setApiOnline] = useState<boolean | null>(null);
 
@@ -306,8 +307,21 @@ export default function StudioPage() {
   const [exportedVideoUrl, setExportedVideoUrl] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  // Submagic Zero-Wait Background Upload & Cloudflare R2 States
+  const [uploadedVideoId, setUploadedVideoId] = useState<string | null>(null);
+  const [isBgUploading, setIsBgUploading] = useState<boolean>(false);
+  const [bgUploadProgress, setBgUploadProgress] = useState<number>(0);
+  const [bgUploadDone, setBgUploadDone] = useState<boolean>(false);
+  const [cloudShareUrl, setCloudShareUrl] = useState<string | null>(null);
+  const [isDraggingOver, setIsDraggingOver] = useState<boolean>(false);
+  const bgUploadXhrRef = useRef<XMLHttpRequest | null>(null);
+
   // Settings Modal
   const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
+
+  // In-Browser GPU Export & Resolution States
+  const [exportResolution, setExportResolution] = useState<"original" | "1080p" | "2k" | "4k">("2k");
+  const [showExportModal, setShowExportModal] = useState<boolean>(false);
 
   // Load saved Groq Key
   useEffect(() => {
@@ -348,18 +362,118 @@ export default function StudioPage() {
       });
   }, [apiUrl]);
 
-  // Video Selection (Only loads video, does NOT auto-transcribe)
+  // Submagic Zero-Wait Background Upload (Uploads silently on Drop/Select)
+  const startBackgroundUpload = (file: File) => {
+    if (!file) return;
+    if (bgUploadXhrRef.current) {
+      try {
+        bgUploadXhrRef.current.abort();
+      } catch {}
+      bgUploadXhrRef.current = null;
+    }
+
+    setIsBgUploading(true);
+    setBgUploadProgress(0);
+    setBgUploadDone(false);
+    setUploadedVideoId(null);
+    setCloudShareUrl(null);
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    const xhr = new XMLHttpRequest();
+    bgUploadXhrRef.current = xhr;
+    xhr.open("POST", `${apiUrl}/api/upload-raw`);
+    xhr.timeout = 600000; // 10 minutes
+
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) {
+        const pct = Math.round((e.loaded / e.total) * 100);
+        setBgUploadProgress(pct);
+      }
+    };
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const res = JSON.parse(xhr.responseText);
+          if (res.video_id) {
+            setUploadedVideoId(res.video_id);
+            setBgUploadDone(true);
+            setIsBgUploading(false);
+            toast.success("Cloud Synced (Zero-Wait Ready) ⚡", {
+              description: `Video cached silently (${res.size_mb || (file.size / (1024*1024)).toFixed(1)} MB). Fast Export will now take 0s upload wait!`
+            });
+          }
+        } catch {
+          setIsBgUploading(false);
+        }
+      } else {
+        setIsBgUploading(false);
+      }
+    };
+
+    xhr.onerror = () => {
+      setIsBgUploading(false);
+    };
+
+    xhr.ontimeout = () => {
+      setIsBgUploading(false);
+    };
+
+    xhr.send(formData);
+  };
+
+  // Unified File Processing (Used by Input File Picker & Drag-and-Drop)
+  const handleProcessFile = (file: File) => {
+    if (!file) return;
+    setVideoFile(file);
+    setVideoPreview(URL.createObjectURL(file));
+    setExportedVideoUrl(null);
+    setCloudShareUrl(null);
+    setErrorMessage(null);
+    setWordsList([]);
+    // Immediately start silent Submagic background upload
+    startBackgroundUpload(file);
+  };
+
+  // Video Selection
   const handleVideoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
-      const file = e.target.files[0];
-      setVideoFile(file);
-      setVideoPreview(URL.createObjectURL(file));
-      setExportedVideoUrl(null);
-      setErrorMessage(null);
-      // Reset words so user can click Generate Captions button manually
-      setWordsList([]);
+      handleProcessFile(e.target.files[0]);
     }
   };
+
+  // Canvas Drag & Drop Handlers
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingOver(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingOver(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingOver(false);
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      const file = e.dataTransfer.files[0];
+      if (file.type.startsWith("video/") || file.name.match(/\.(mp4|mov|avi|mkv|webm)$/i)) {
+        handleProcessFile(file);
+        toast.info("Video Dropped & Cloud Syncing 🚀", {
+          description: "Silently caching video in background while you customize captions..."
+        });
+      } else {
+        toast.error("Invalid Video File", { description: "Please drop an MP4, MOV, or WEBM video." });
+      }
+    }
+  };
+
 
   // Custom Font Upload & Dynamic Browser Registration
   const handleFontUpload = async (file: File) => {
@@ -683,7 +797,7 @@ export default function StudioPage() {
   };
 
   // 1. FAST CLIENT-SIDE EXPORT (Zero-Upload Instant GPU Render)
-  const handleClientSideRender = async () => {
+  const handleClientSideRender = async (targetResOverride?: "original" | "1080p" | "2k" | "4k") => {
     if (!videoFile) {
       toast.error("No Video Found", { description: "Please upload or drop a video file first." });
       return;
@@ -693,17 +807,23 @@ export default function StudioPage() {
       return;
     }
 
+    setShowExportModal(false);
     setIsRendering(true);
     setErrorMessage(null);
     setRenderProgress(5);
-    setRenderStep("Initializing local GPU video canvas...");
+    const targetRes = targetResOverride || exportResolution;
+    const resLabel = targetRes === "2k" ? "2K Quad HD" : targetRes === "4k" ? "4K Ultra HD" : "1080p Full HD";
+    setRenderStep(`Initializing device GPU canvas (${resLabel})...`);
     const toastId = "export-reel";
-    toast.loading("⚡ Fast Device Export Starting...", {
+    toast.loading(`⚡ Fast Device Export Starting (${resLabel})...`, {
       id: toastId,
-      description: "0s upload • Rendering directly on your device with GPU."
+      description: "0s upload • Rendering directly on your device GPU."
     });
 
     try {
+      const selectedBgmTrack = BGM_TRACKS.find((t) => t.id === selectedBgmId);
+      const bgmUrl = selectedBgmTrack?.file || selectedBgmUrl || (customBgmFile ? URL.createObjectURL(customBgmFile) : null);
+
       const result = await renderCaptionedVideoClientSide(
         videoFile,
         wordsList,
@@ -716,14 +836,18 @@ export default function StudioPage() {
           enableEmojis,
           activeStyle,
           customFontFamily,
-          playbackRate: 1.0
+          playbackRate: 1.0,
+          resolution: targetRes,
+          bgmAudioUrl: bgmUrl,
+          bgmVolume: bgmVolume,
+          sfxStyle: sfxStyle
         },
         (pct, step) => {
           setRenderProgress(pct);
           setRenderStep(step);
-          toast.loading(`⚡ Fast Device Export (${pct}%)...`, {
+          toast.loading(step, {
             id: toastId,
-            description: step
+            description: "0s upload • Hardware GPU accelerated encoding active."
           });
         }
       );
@@ -737,12 +861,12 @@ export default function StudioPage() {
       const ext = result.mimeType.includes("mp4") ? "mp4" : "webm";
       const a = document.createElement("a");
       a.href = blobUrl;
-      a.download = `${videoFile.name.replace(/\.[^/.]+$/, "")}_captioned.${ext}`;
+      a.download = `${videoFile.name.replace(/\.[^/.]+$/, "")}_${targetRes}_captioned.${ext}`;
       a.click();
 
-      toast.success("Viral Reel Exported & Downloaded! 🎉", {
+      toast.success(`${resLabel} Reel Exported & Downloaded! 🎉`, {
         id: toastId,
-        description: `Exported directly on your device in ~30s without slow cloud uploads!`
+        description: `Exported directly on your device GPU without slow cloud uploads!`
       });
     } catch (err: any) {
       console.warn("Client-side render error, fallback available:", err);
@@ -756,7 +880,7 @@ export default function StudioPage() {
     }
   };
 
-  // Full Video Render (Cloud Server FFmpeg with Task 1 Polling & XMLHttpRequest upload)
+  // Full Video Render (Submagic Zero-Wait Export + Task 1 Polling + 7-Day Cloud Storage)
   const handleRenderVideo = async () => {
     if (!videoFile) {
       setErrorMessage("Please upload a video file first");
@@ -768,129 +892,190 @@ export default function StudioPage() {
     setIsRendering(true);
     setErrorMessage(null);
     setRenderProgress(0);
-    setRenderStep("Preparing payload...");
-
-    const formData = new FormData();
-    formData.append("file", videoFile);
-    formData.append("style_name", styleName);
-    formData.append("words_per_chunk", wordsPerChunk.toString());
-    formData.append("caption_position", position);
-    formData.append("font_size", fontSize.toString());
-    formData.append("export_resolution", exportRes);
-    formData.append("enable_emojis", enableEmojis ? "true" : "false");
-    formData.append("font_choice", fontChoice);
-    formData.append("remove_silence", removeSilence ? "true" : "false");
-    formData.append("enable_sfx", enableSfx ? "true" : "false");
-    formData.append("sfx_style", sfxStyle);
-    if (customFontFile) formData.append("custom_font", customFontFile);
-    if (selectedBgmUrl) {
-      formData.append("bg_music_url", selectedBgmUrl);
-      formData.append("bg_music_volume", bgmVolume.toString());
-      formData.append("enable_auto_ducking", enableAutoDucking ? "true" : "false");
-      formData.append("bg_music_start_offset", bgmStartOffset.toString());
-    } else if (selectedBgmId && selectedBgmId !== "none" && selectedBgmId !== "custom") {
-      formData.append("bg_music_id", selectedBgmId);
-      formData.append("bg_music_volume", bgmVolume.toString());
-      formData.append("enable_auto_ducking", enableAutoDucking ? "true" : "false");
-      formData.append("bg_music_start_offset", bgmStartOffset.toString());
-    }
-    if (customBgmFile) {
-      formData.append("custom_bg_music", customBgmFile);
-      formData.append("bg_music_volume", bgmVolume.toString());
-      formData.append("enable_auto_ducking", enableAutoDucking ? "true" : "false");
-      formData.append("bg_music_start_offset", bgmStartOffset.toString());
-    }
-    if (groqKey) formData.append("groq_api_key", groqKey);
-    if (wordsList && wordsList.length > 0) {
-      formData.append("words_json", JSON.stringify(wordsList));
-    } else if (editableTranscript && editableTranscript.trim()) {
-      formData.append("words_json", editableTranscript);
-    }
+    setRenderStep("Preparing render payload...");
 
     const toastId = "export-reel";
 
     try {
       let activeApi = apiUrl;
+      let jobId: string | null = null;
+      let currentVideoId = uploadedVideoId;
 
-      // STAGE 1: Uploading with real XMLHttpRequest.upload.onprogress
-      setRenderStep("Uploading video to cloud...");
-      toast.loading("Uploading video to cloud (0%)...", {
-        id: toastId,
-        description: `Starting transfer of ${fileSizeMB.toFixed(1)} MB...`
-      });
+      // If silent background upload is still completing, wait for it so we don't upload 200MB again!
+      if (!currentVideoId && isBgUploading) {
+        setRenderStep("Finalizing silent cloud upload...");
+        toast.loading(`Finalizing background sync (${bgUploadProgress}%)...`, {
+          id: toastId,
+          description: "Video is almost uploaded. Export will start with 0s wait time!"
+        });
 
-      const uploadResult: any = await new Promise((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open("POST", `${activeApi}/api/render`);
+        const startWait = Date.now();
+        while (isBgUploading && !uploadedVideoId && Date.now() - startWait < 45000) {
+          await new Promise((r) => setTimeout(r, 400));
+          currentVideoId = uploadedVideoId;
+        }
+      }
 
-        xhr.timeout = 600000; // 10 minutes timeout for high-bitrate video uploads
+      // CASE 1: ZERO-WAIT FAST EXPORT (Uses pre-uploaded video_id, payload is only ~10KB!)
+      if (currentVideoId) {
+        setRenderProgress(20);
+        setRenderStep("0s Upload! Submitting lightweight render manifest (10KB)...");
+        toast.loading("⚡ Zero-Wait Fast Export Starting...", {
+          id: toastId,
+          description: `Skipped ${fileSizeMB.toFixed(1)} MB upload! Rendering immediately on cloud server.`
+        });
 
-        xhr.upload.onprogress = (e) => {
-          if (e.lengthComputable) {
-            const uploadPct = Math.round((e.loaded / e.total) * 100);
-            if (uploadPct >= 100) {
-              setRenderProgress(25);
-              setRenderStep("Video transferred! Server is saving 194MB to disk & starting FFmpeg queue...");
-              toast.loading("Video Transferred! Processing... ⏳", {
-                id: toastId,
-                description: `Received 100% (${((e.total) / (1024 * 1024)).toFixed(1)}MB). Writing to disk & initializing FFmpeg...`
-              });
-            } else {
-              // Map upload 0-100% to progress bar 0-25%
-              setRenderProgress(Math.min(24, Math.round(uploadPct * 0.25)));
-              setRenderStep(`Uploading to cloud: ${uploadPct}% (${((e.loaded) / (1024 * 1024)).toFixed(1)}MB / ${((e.total) / (1024 * 1024)).toFixed(1)}MB)`);
-              toast.loading(`Uploading to cloud (${uploadPct}%)...`, {
-                id: toastId,
-                description: `Uploaded ${((e.loaded) / (1024 * 1024)).toFixed(1)}MB of ${((e.total) / (1024 * 1024)).toFixed(1)}MB`
-              });
-            }
-          }
-        };
+        const cachedForm = new FormData();
+        cachedForm.append("video_id", currentVideoId);
+        cachedForm.append("style_name", styleName);
+        cachedForm.append("words_per_chunk", wordsPerChunk.toString());
+        cachedForm.append("caption_position", position);
+        cachedForm.append("font_size", fontSize.toString());
+        cachedForm.append("export_resolution", exportRes);
+        cachedForm.append("enable_emojis", enableEmojis ? "true" : "false");
+        cachedForm.append("font_choice", fontChoice);
+        cachedForm.append("remove_silence", removeSilence ? "true" : "false");
+        cachedForm.append("enable_sfx", enableSfx ? "true" : "false");
+        cachedForm.append("sfx_style", sfxStyle);
+        cachedForm.append("sfx_volume", sfxVolume.toString());
+        if (customFontFile) cachedForm.append("custom_font", customFontFile);
+        if (selectedBgmUrl) {
+          cachedForm.append("bg_music_url", selectedBgmUrl);
+          cachedForm.append("bg_music_volume", bgmVolume.toString());
+          cachedForm.append("enable_auto_ducking", enableAutoDucking ? "true" : "false");
+          cachedForm.append("bg_music_start_offset", bgmStartOffset.toString());
+        } else if (selectedBgmId && selectedBgmId !== "none" && selectedBgmId !== "custom") {
+          cachedForm.append("bg_music_id", selectedBgmId);
+          cachedForm.append("bg_music_volume", bgmVolume.toString());
+          cachedForm.append("enable_auto_ducking", enableAutoDucking ? "true" : "false");
+          cachedForm.append("bg_music_start_offset", bgmStartOffset.toString());
+        }
+        if (customBgmFile) {
+          cachedForm.append("custom_bg_music", customBgmFile);
+          cachedForm.append("bg_music_volume", bgmVolume.toString());
+          cachedForm.append("enable_auto_ducking", enableAutoDucking ? "true" : "false");
+          cachedForm.append("bg_music_start_offset", bgmStartOffset.toString());
+        }
+        if (groqKey) cachedForm.append("groq_api_key", groqKey);
+        if (wordsList && wordsList.length > 0) {
+          cachedForm.append("words_json", JSON.stringify(wordsList));
+        } else if (editableTranscript && editableTranscript.trim()) {
+          cachedForm.append("words_json", editableTranscript);
+        }
 
-        xhr.upload.onload = () => {
-          setRenderProgress(25);
-          setRenderStep("Video transferred! Server is saving file & allocating FFmpeg worker...");
-          toast.loading("Video Transferred! Initializing Engine... ⚙️", {
-            id: toastId,
-            description: "Data received by server. Writing to disk and starting render engine..."
-          });
-        };
+        const res = await fetch(`${activeApi}/api/render-cached`, {
+          method: "POST",
+          body: cachedForm
+        });
 
-        xhr.ontimeout = () => {
-          reject(new Error("Video upload timed out. Please check your internet connection and retry."));
-        };
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.detail || `Zero-wait export failed with status ${res.status}`);
+        }
 
-        xhr.onload = () => {
-          if (xhr.status >= 200 && xhr.status < 300) {
-            try {
-              resolve(JSON.parse(xhr.responseText));
-            } catch {
-              resolve({ raw: xhr.responseText });
-            }
-          } else {
-            let errorText = xhr.responseText;
-            try {
-              const parsed = JSON.parse(xhr.responseText);
-              if (parsed.detail) errorText = parsed.detail;
-            } catch {
-              if (xhr.status === 500 || xhr.status === 503 || errorText.includes("<!DOCTYPE") || errorText.includes("<html")) {
-                errorText = `Cloud server was updating (HTTP ${xhr.status}). Server is now online. Please click Export Reel again.`;
+        const data = await res.json();
+        jobId = data.job_id;
+
+      } else {
+        // CASE 2: FALLBACK TO STANDARD VIDEO UPLOAD (If background upload was cancelled or failed)
+        setRenderStep("Uploading video to cloud...");
+        toast.loading("Uploading video to cloud (0%)...", {
+          id: toastId,
+          description: `Starting transfer of ${fileSizeMB.toFixed(1)} MB...`
+        });
+
+        const formData = new FormData();
+        formData.append("file", videoFile);
+        formData.append("style_name", styleName);
+        formData.append("words_per_chunk", wordsPerChunk.toString());
+        formData.append("caption_position", position);
+        formData.append("font_size", fontSize.toString());
+        formData.append("export_resolution", exportRes);
+        formData.append("enable_emojis", enableEmojis ? "true" : "false");
+        formData.append("font_choice", fontChoice);
+        formData.append("remove_silence", removeSilence ? "true" : "false");
+        formData.append("enable_sfx", enableSfx ? "true" : "false");
+        formData.append("sfx_style", sfxStyle);
+        if (customFontFile) formData.append("custom_font", customFontFile);
+        if (selectedBgmUrl) {
+          formData.append("bg_music_url", selectedBgmUrl);
+          formData.append("bg_music_volume", bgmVolume.toString());
+          formData.append("enable_auto_ducking", enableAutoDucking ? "true" : "false");
+          formData.append("bg_music_start_offset", bgmStartOffset.toString());
+        } else if (selectedBgmId && selectedBgmId !== "none" && selectedBgmId !== "custom") {
+          formData.append("bg_music_id", selectedBgmId);
+          formData.append("bg_music_volume", bgmVolume.toString());
+          formData.append("enable_auto_ducking", enableAutoDucking ? "true" : "false");
+          formData.append("bg_music_start_offset", bgmStartOffset.toString());
+        }
+        if (customBgmFile) {
+          formData.append("custom_bg_music", customBgmFile);
+          formData.append("bg_music_volume", bgmVolume.toString());
+          formData.append("enable_auto_ducking", enableAutoDucking ? "true" : "false");
+          formData.append("bg_music_start_offset", bgmStartOffset.toString());
+        }
+        if (groqKey) formData.append("groq_api_key", groqKey);
+        if (wordsList && wordsList.length > 0) {
+          formData.append("words_json", JSON.stringify(wordsList));
+        } else if (editableTranscript && editableTranscript.trim()) {
+          formData.append("words_json", editableTranscript);
+        }
+
+        const uploadResult: any = await new Promise((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open("POST", `${activeApi}/api/render`);
+          xhr.timeout = 600000;
+
+          xhr.upload.onprogress = (e) => {
+            if (e.lengthComputable) {
+              const uploadPct = Math.round((e.loaded / e.total) * 100);
+              if (uploadPct >= 100) {
+                setRenderProgress(25);
+                setRenderStep("Video transferred! Server is writing to disk & starting FFmpeg queue...");
+              } else {
+                setRenderProgress(Math.min(24, Math.round(uploadPct * 0.25)));
+                setRenderStep(`Uploading to cloud: ${uploadPct}% (${((e.loaded) / (1024 * 1024)).toFixed(1)}MB / ${((e.total) / (1024 * 1024)).toFixed(1)}MB)`);
+                toast.loading(`Uploading to cloud (${uploadPct}%)...`, {
+                  id: toastId,
+                  description: `Uploaded ${((e.loaded) / (1024 * 1024)).toFixed(1)}MB of ${((e.total) / (1024 * 1024)).toFixed(1)}MB`
+                });
               }
             }
-            reject(new Error(errorText || `Upload failed with HTTP ${xhr.status}`));
-          }
-        };
+          };
 
-        xhr.onerror = () => reject(new Error("Network error during video upload."));
-        xhr.send(formData);
-      });
+          xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+              try {
+                resolve(JSON.parse(xhr.responseText));
+              } catch {
+                resolve({ raw: xhr.responseText });
+              }
+            } else {
+              let errorText = xhr.responseText;
+              try {
+                const parsed = JSON.parse(xhr.responseText);
+                if (parsed.detail) errorText = parsed.detail;
+              } catch {
+                if (xhr.status === 500 || xhr.status === 503 || errorText.includes("<!DOCTYPE") || errorText.includes("<html")) {
+                  errorText = `Cloud server was updating (HTTP ${xhr.status}). Server is now online. Please click Export Reel again.`;
+                }
+              }
+              reject(new Error(errorText || `Upload failed with HTTP ${xhr.status}`));
+            }
+          };
 
-      const jobId = uploadResult.job_id;
+          xhr.onerror = () => reject(new Error("Network error during video upload."));
+          xhr.send(formData);
+        });
+
+        jobId = uploadResult.job_id;
+      }
+
       if (!jobId) {
         throw new Error("No job ID received from render queue.");
       }
 
-      // STAGE 2 & 3: Queued -> Rendering -> Ready (Poll every 2 seconds)
+      // STAGE 2: Queued -> Rendering -> Ready (Poll every 2 seconds)
       setRenderProgress(25);
       setRenderStep("Job queued in render queue...");
       toast.loading("Queued in render queue...", {
@@ -922,6 +1107,15 @@ export default function StudioPage() {
           const downloadUrl = `${activeApi}/api/render/${jobId}/download`;
           setExportedVideoUrl(downloadUrl);
 
+          // Task 3: 7-Day Cloud Storage Shareable Link
+          let shareUrl = jobStatus.cloud_url;
+          if (!shareUrl) {
+            shareUrl = downloadUrl;
+          } else if (!shareUrl.startsWith("http")) {
+            shareUrl = `${activeApi}${shareUrl.startsWith("/") ? "" : "/"}${shareUrl}`;
+          }
+          setCloudShareUrl(shareUrl);
+
           // Auto-trigger browser download
           try {
             const a = document.createElement("a");
@@ -936,7 +1130,7 @@ export default function StudioPage() {
 
           toast.success("Viral Reel Rendered & Downloaded! 🎉", {
             id: toastId,
-            description: "Server render complete with high-retention subtitles & audio mix."
+            description: "Server render complete with visually lossless 60FPS subtitles & ducked audio."
           });
           break;
         }
@@ -977,38 +1171,38 @@ export default function StudioPage() {
   return (
     <div className="h-screen w-screen overflow-hidden bg-[#0A0D14] text-slate-100 flex flex-col font-sans select-none">
       {/* 1. COMPACT PROFESSIONAL HEADER */}
-      <header className="h-12 border-b border-slate-800/60 bg-[#0E121D] px-4 flex items-center justify-between z-50 shrink-0">
+      <header className="h-12 border-b border-slate-800/60 bg-[#0E121D] px-2 sm:px-4 flex items-center justify-between z-50 shrink-0 gap-2">
         {/* Left: Hub Navigation & Brand */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3 shrink-0">
           <Link
             href="/"
             className="flex items-center gap-1 text-slate-400 hover:text-amber-400 text-xs font-semibold px-2 py-1 rounded bg-slate-900 border border-slate-800 transition-all"
             title="Back to Creator Tools Hub"
           >
             <ChevronLeft className="h-3.5 w-3.5" />
-            <span>Hub</span>
+            <span className="hidden sm:inline">Hub</span>
           </Link>
 
           <div className="h-4 w-px bg-slate-800" />
 
-          <div className="flex items-center gap-2">
-            <div className="h-6 w-6 rounded-md bg-gradient-to-tr from-amber-500 to-orange-500 flex items-center justify-center">
+          <div className="flex items-center gap-1.5 sm:gap-2">
+            <div className="h-6 w-6 rounded-md bg-gradient-to-tr from-amber-500 to-orange-500 flex items-center justify-center shrink-0">
               <Flame className="h-3.5 w-3.5 text-black font-black" />
             </div>
-            <span className="text-xs font-bold text-white uppercase tracking-tight">
+            <span className="text-xs font-bold text-white uppercase tracking-tight hidden sm:inline">
               Caption Studio Pro
             </span>
           </div>
 
           <div className="hidden md:flex items-center text-[11px] text-slate-500 gap-1.5 pl-3 border-l border-slate-800">
-            <span className="text-slate-400 font-mono truncate max-w-[150px]">
+            <span className="text-slate-400 font-mono truncate max-w-[120px] lg:max-w-[150px]">
               {videoFile ? videoFile.name : "Sample_Reel.mp4"}
             </span>
           </div>
         </div>
 
         {/* Center: Quick Switch to Upscaler */}
-        <div className="hidden sm:flex items-center gap-2">
+        <div className="hidden xl:flex items-center gap-2">
           <Link
             href="/upscaler"
             className="text-[11px] text-slate-400 hover:text-white px-2.5 py-1 rounded-md bg-slate-950 border border-slate-800 transition-all flex items-center gap-1.5"
@@ -1019,15 +1213,15 @@ export default function StudioPage() {
         </div>
 
         {/* Right: Actions */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
           {/* Groq Cloud Speed Mode Button */}
           <button
             onClick={() => setShowSettingsModal(true)}
-            className="h-8 px-2.5 rounded-md bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white text-xs flex items-center gap-1.5 transition-all cursor-pointer"
+            className="h-8 px-2 sm:px-2.5 rounded-md bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white text-xs flex items-center gap-1.5 transition-all cursor-pointer"
             title="Groq Cloud Whisper LPU (1-Second Transcription)"
           >
             <Zap className={`h-3.5 w-3.5 ${groqKey ? "text-emerald-400" : "text-amber-400"}`} />
-            <span className="hidden sm:inline">{groqKey ? "Groq 1s Active" : "1s Speed Key"}</span>
+            <span className="hidden md:inline">{groqKey ? "Groq 1s Active" : "1s Speed Key"}</span>
             <span className={`h-1.5 w-1.5 rounded-full ${groqKey ? "bg-emerald-400" : "bg-amber-400 animate-pulse"}`} />
           </button>
 
@@ -1035,18 +1229,18 @@ export default function StudioPage() {
           <button
             onClick={() => handleTranscribeSpeech()}
             disabled={isTranscribing || !videoFile}
-            className="h-8 px-3 rounded-md bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/50 text-amber-300 font-bold text-xs flex items-center gap-1.5 shadow-sm active:scale-95 disabled:opacity-40 transition-all cursor-pointer"
+            className="h-8 px-2 sm:px-3 rounded-md bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/50 text-amber-300 font-bold text-xs flex items-center gap-1.5 shadow-sm active:scale-95 disabled:opacity-40 transition-all cursor-pointer"
             title="Auto-transcribe speech to word-level animated captions"
           >
             {isTranscribing ? (
               <>
                 <RefreshCw className="h-3 w-3 animate-spin text-amber-400" />
-                <span>Transcribing...</span>
+                <span className="hidden sm:inline">Transcribing...</span>
               </>
             ) : (
               <>
                 <Wand2 className="h-3.5 w-3.5 text-amber-400" />
-                <span>{wordsList.length > 0 ? "Re-Generate" : "Generate Captions"}</span>
+                <span className="hidden sm:inline">{wordsList.length > 0 ? "Re-Generate" : "Generate Captions"}</span>
               </>
             )}
           </button>
@@ -1055,42 +1249,71 @@ export default function StudioPage() {
           <button
             onClick={handleDownloadSrt}
             disabled={wordsList.length === 0}
-            className="h-8 px-2.5 rounded-md bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white font-bold text-xs flex items-center gap-1.5 shadow-sm active:scale-95 disabled:opacity-40 transition-all cursor-pointer"
+            className="h-8 px-2 sm:px-2.5 rounded-md bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white font-bold text-xs flex items-center gap-1.5 shadow-sm active:scale-95 disabled:opacity-40 transition-all cursor-pointer"
             title="Instant 0-second subtitle export (.srt file for Premiere, CapCut, or Instagram)"
           >
             <FileText className="h-3.5 w-3.5 text-amber-400" />
-            <span className="hidden sm:inline">.SRT (Instant)</span>
-            <span className="sm:hidden">.SRT</span>
+            <span className="hidden sm:inline">.SRT</span>
           </button>
 
-          {/* 1. Primary Action: Cloud Full HD Export (Unlimited Size, Visually Lossless CRF 18, Full Sync) */}
+          {/* Primary Action: Export Reel (Device GPU 2K/4K or Cloud) */}
           <button
-            onClick={handleRenderVideo}
+            onClick={() => setShowExportModal(true)}
             disabled={isRendering || !videoFile}
-            className="h-8 px-4 rounded-md bg-gradient-to-r from-amber-500 via-amber-400 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black font-extrabold text-xs flex items-center gap-1.5 shadow-md shadow-amber-500/20 active:scale-95 disabled:opacity-40 transition-all cursor-pointer"
-            title="Cloud Full HD Export: Burns vector subtitles, SFX, and ducked audio mix directly into your video at original camera resolution"
+            className="h-8 px-2.5 sm:px-4 rounded-md bg-gradient-to-r from-amber-500 via-amber-400 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black font-extrabold text-xs flex items-center gap-1.5 shadow-md shadow-amber-500/20 active:scale-95 disabled:opacity-40 transition-all cursor-pointer"
+            title="Export Reel: Instant Hardware Device GPU (2K / 4K / 1080p) or Cloud Render"
           >
             {isRendering ? (
               <>
                 <RefreshCw className="h-3.5 w-3.5 animate-spin text-black" />
-                <span>{renderStep || `Exporting (${renderProgress}%)...`}</span>
+                <span>{renderStep ? `${renderProgress}%` : `Exporting...`}</span>
               </>
             ) : (
               <>
-                <Download className="h-3.5 w-3.5 text-black" />
-                <span>🎬 Export Reel (Full HD)</span>
+                <Zap className="h-3.5 w-3.5 text-black" />
+                <span className="hidden sm:inline">⚡ Export Reel (2K / GPU)</span>
+                <span className="sm:hidden text-[11px]">Export 2K</span>
               </>
             )}
           </button>
-
-
         </div>
       </header>
 
+      {/* MOBILE VIEW SWITCHER BAR (Visible on mobile & tablet below lg) */}
+      <div className="lg:hidden h-10 border-b border-slate-800/80 bg-[#0C101A] px-2 flex items-center justify-center gap-2 shrink-0 z-40">
+        <button
+          type="button"
+          onClick={() => setMobileTab("canvas")}
+          className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
+            mobileTab === "canvas"
+              ? "bg-amber-500 text-black shadow-md shadow-amber-500/20"
+              : "bg-slate-900 text-slate-400 hover:text-white border border-slate-800"
+          }`}
+        >
+          <Play className="h-3 w-3" />
+          <span>👁️ Canvas Stage</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setMobileTab("controls")}
+          className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
+            mobileTab === "controls"
+              ? "bg-amber-500 text-black shadow-md shadow-amber-500/20"
+              : "bg-slate-900 text-slate-400 hover:text-white border border-slate-800"
+          }`}
+        >
+          <Sliders className="h-3 w-3" />
+          <span>🎨 Style &amp; Sound Controls</span>
+        </button>
+      </div>
+
       {/* 2. MAIN WORKSTATION BODY */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* LEFT CONTROL PANEL (Width: 320px) */}
-        <div className="w-80 border-r border-slate-800/70 bg-[#0C101A] flex flex-col shrink-0">
+      <div className="flex-1 flex overflow-hidden relative">
+        {/* LEFT CONTROL PANEL (Full width on mobile when selected, 320px on desktop) */}
+        <div className={`w-full lg:w-80 border-r border-slate-800/70 bg-[#0C101A] flex flex-col shrink-0 ${
+          mobileTab === "controls" ? "flex" : "hidden lg:flex"
+        }`}>
+
           {/* Segmented Control Tabs */}
           <div className="h-9 border-b border-slate-800/80 flex items-center px-1.5 gap-1 bg-[#090D16]">
             {(
@@ -1120,7 +1343,16 @@ export default function StudioPage() {
           <div className="flex-1 overflow-y-auto p-3.5 space-y-4 custom-scrollbar">
             {/* Video Upload Dropzone */}
             <div>
-              <label className="border border-dashed border-slate-700/80 hover:border-amber-500/60 rounded-lg p-2.5 flex items-center justify-between cursor-pointer bg-slate-950/40 hover:bg-slate-900/40 transition-all group">
+              <label
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+                className={`border border-dashed rounded-lg p-2.5 flex items-center justify-between cursor-pointer transition-all group ${
+                  isDraggingOver
+                    ? "border-amber-400 bg-amber-500/10"
+                    : "border-slate-700/80 hover:border-amber-500/60 bg-slate-950/40 hover:bg-slate-900/40"
+                }`}
+              >
                 <input type="file" accept="video/*" onChange={handleVideoSelect} className="hidden" />
                 <div className="flex items-center gap-2 overflow-hidden">
                   <Video className="h-4 w-4 text-amber-400 shrink-0" />
@@ -1132,6 +1364,27 @@ export default function StudioPage() {
                   {videoFile ? "Change" : "Browse"}
                 </span>
               </label>
+
+              {/* Submagic Background Upload Status */}
+              {videoFile && (
+                <div className="mt-1 flex items-center justify-between px-1 text-[10px]">
+                  {isBgUploading ? (
+                    <span className="flex items-center gap-1 text-amber-400 font-medium">
+                      <RefreshCw className="h-3 w-3 animate-spin text-amber-400" />
+                      <span>Silent Cloud Sync: {bgUploadProgress}%</span>
+                    </span>
+                  ) : bgUploadDone ? (
+                    <span className="flex items-center gap-1 text-emerald-400 font-semibold">
+                      <Check className="h-3 w-3 text-emerald-400" />
+                      <span>Cloud Synced (0s Export Ready)</span>
+                    </span>
+                  ) : (
+                    <span className="text-slate-500">Ready for editing</span>
+                  )}
+                  <span className="text-slate-500">{(videoFile.size / (1024 * 1024)).toFixed(1)} MB</span>
+                </div>
+              )}
+
 
               {/* Primary Caption Generation Action */}
               {videoFile && (
@@ -1733,23 +1986,43 @@ export default function StudioPage() {
 
           {/* Exported Result Download Toast/Banner if Available */}
           {exportedVideoUrl && (
-            <div className="p-3 border-t border-slate-800 bg-emerald-950/30">
+            <div className="p-3 border-t border-slate-800 bg-emerald-950/30 space-y-2">
               <a
                 href={exportedVideoUrl}
                 download="viral_captioned_reel.mp4"
-                className="w-full py-2 px-3 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black font-extrabold text-xs flex items-center justify-center gap-1.5 shadow-md transition-all"
+                className="w-full py-2 px-3 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black font-extrabold text-xs flex items-center justify-center gap-1.5 shadow-md transition-all cursor-pointer"
               >
                 <Download className="h-3.5 w-3.5" />
-                Download Rendered MP4
+                <span>Download Rendered MP4</span>
               </a>
+
+              {/* Task 3: Cloudflare R2 7-Day Shareable Link Button */}
+              {cloudShareUrl && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText(cloudShareUrl);
+                    toast.success("🔗 7-Day Cloud Link Copied!", {
+                      description: "Paste on mobile browser or share with clients to download directly (Valid for 7 days)."
+                    });
+                  }}
+                  className="w-full py-1.5 px-3 rounded-lg bg-slate-900 hover:bg-slate-800 border border-emerald-500/40 text-emerald-400 hover:text-emerald-300 font-bold text-[11px] flex items-center justify-center gap-1.5 transition-all cursor-pointer active:scale-95"
+                  title="Copy 7-Day Cloudflare R2 Download Link"
+                >
+                  <Sparkles className="h-3 w-3 text-amber-400" />
+                  <span>🔗 Copy 7-Day Cloud Link</span>
+                </button>
+              )}
             </div>
           )}
         </div>
 
-        {/* CENTER VIEWPORT STAGE */}
-        <div className="flex-1 bg-[#07090F] flex flex-col relative overflow-hidden">
+        {/* CENTER VIEWPORT STAGE (Full width on mobile when canvas active, flex-1 on desktop) */}
+        <div className={`flex-1 bg-[#07090F] flex flex-col relative overflow-hidden ${
+          mobileTab === "canvas" ? "flex" : "hidden lg:flex"
+        }`}>
           {/* Viewport Top HUD Bar */}
-          <div className="h-9 border-b border-slate-800/60 bg-[#0A0D15] px-4 flex items-center justify-between text-xs text-slate-400 shrink-0">
+          <div className="h-9 border-b border-slate-800/60 bg-[#0A0D15] px-2 sm:px-4 flex items-center justify-between text-xs text-slate-400 shrink-0">
             <div className="flex items-center gap-2">
               <span className="font-mono text-[10px] bg-slate-900 px-2 py-0.5 rounded border border-slate-800 text-slate-300">
                 {getAspectRatioLabel(nativeWidth, nativeHeight)} • {nativeWidth}×{nativeHeight}
@@ -1796,9 +2069,12 @@ export default function StudioPage() {
             </div>
           </div>
 
-          {/* Video Stage Canvas */}
+          {/* Video Stage Canvas with Drop Support */}
           <div
             ref={stageScrollRef}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
             className="flex-1 flex items-center justify-center p-4 overflow-auto relative custom-scrollbar"
           >
             {/* Subtle Ambient Grid */}
@@ -1807,6 +2083,9 @@ export default function StudioPage() {
             {/* Realistic Mobile Viewport Container */}
             <div
               ref={videoContainerRef}
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
               style={{
                 width: viewScaleMode === "100" ? `${nativeWidth}px` : nativeWidth > nativeHeight ? "100%" : "auto",
                 height: viewScaleMode === "100" ? `${nativeHeight}px` : nativeWidth <= nativeHeight ? "100%" : "auto",
@@ -1817,11 +2096,24 @@ export default function StudioPage() {
                 maxWidth: viewScaleMode === "fit" ? "100%" : "none"
               }}
               className={`relative group bg-black flex items-center justify-center transition-all ${
-                viewScaleMode === "fit" && nativeWidth <= nativeHeight
+                isDraggingOver
+                  ? "rounded-[28px] border-[3px] border-amber-400 ring-4 ring-amber-500/30 shadow-2xl"
+                  : viewScaleMode === "fit" && nativeWidth <= nativeHeight
                   ? "rounded-[28px] border-[3px] border-slate-800/90 shadow-2xl shadow-black/80 overflow-hidden"
                   : "rounded-lg border border-slate-800 shadow-xl overflow-hidden"
               }`}
             >
+              {/* Drag Over Overlay */}
+              {isDraggingOver && (
+                <div className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm border-2 border-dashed border-amber-400 rounded-[28px] flex flex-col items-center justify-center text-center p-6 pointer-events-none">
+                  <div className="w-14 h-14 rounded-full bg-amber-500/20 border border-amber-400 flex items-center justify-center text-amber-300 mb-2 animate-bounce">
+                    <Video className="h-7 w-7" />
+                  </div>
+                  <p className="text-sm font-black text-white uppercase tracking-wider">Drop Video To Start ⚡</p>
+                  <p className="text-[11px] text-amber-300 mt-1">Silent background upload begins immediately!</p>
+                </div>
+              )}
+
               {/* Video Tag */}
               {videoPreview ? (
                 <video
@@ -1839,15 +2131,17 @@ export default function StudioPage() {
                 />
               ) : (
                 <div className="absolute inset-0 bg-gradient-to-b from-slate-900/60 to-black flex items-center justify-center">
-                  <div className="text-center p-4 space-y-1.5">
-                    <div className="h-9 w-9 rounded-full bg-slate-800/80 flex items-center justify-center mx-auto text-amber-400">
-                      <Video className="h-4 w-4" />
+                  <label className="text-center p-6 space-y-2 cursor-pointer group flex flex-col items-center">
+                    <input type="file" accept="video/*" onChange={handleVideoSelect} className="hidden" />
+                    <div className="h-12 w-12 rounded-full bg-slate-800/80 group-hover:bg-amber-500 group-hover:text-black flex items-center justify-center mx-auto text-amber-400 transition-all shadow-lg">
+                      <Video className="h-6 w-6" />
                     </div>
-                    <p className="text-[11px] font-semibold text-slate-300">No Video Loaded</p>
-                    <p className="text-[9px] text-slate-500">Drop a reel into the left panel to begin</p>
-                  </div>
+                    <p className="text-xs font-bold text-slate-200 group-hover:text-white">Click or Drop Video Reel (9:16)</p>
+                    <p className="text-[10px] text-slate-500">Submagic Zero-Wait Upload • MP4, MOV, WEBM</p>
+                  </label>
                 </div>
               )}
+
 
               {/* Floating CTA Banner on Video Canvas */}
               {videoPreview && wordsList.length === 0 && !isRendering && (
@@ -2088,7 +2382,7 @@ export default function StudioPage() {
               </button>
 
               {/* Reel Volume / Sound Control */}
-              <div className="flex items-center gap-1.5 bg-slate-950 px-2.5 py-1 rounded-lg border border-slate-800 shrink-0">
+              <div className="flex items-center gap-1.5 bg-slate-950 px-2 sm:px-2.5 py-1 rounded-lg border border-slate-800 shrink-0">
                 <button
                   onClick={toggleMute}
                   className="text-slate-400 hover:text-white transition-colors cursor-pointer"
@@ -2109,13 +2403,14 @@ export default function StudioPage() {
                   step={0.05}
                   value={isMuted ? 0 : videoVolume}
                   onChange={(e) => handleVolumeChange(parseFloat(e.target.value))}
-                  className="w-16 accent-amber-500 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
+                  className="hidden md:block w-16 accent-amber-500 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
                   title={`Reel Volume: ${Math.round((isMuted ? 0 : videoVolume) * 100)}%`}
                 />
-                <span className="font-mono text-[10px] text-slate-400 w-7 text-right">
+                <span className="hidden md:inline font-mono text-[10px] text-slate-400 w-7 text-right">
                   {Math.round((isMuted ? 0 : videoVolume) * 100)}%
                 </span>
               </div>
+
 
               {/* Timecode */}
               <span className="font-mono text-[11px] text-amber-400 font-bold shrink-0">
@@ -2228,6 +2523,126 @@ export default function StudioPage() {
                 Save &amp; Activate 1s Mode
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Export Action Center Modal (Device GPU 2K/4K vs Cloud Render) */}
+      {showExportModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200">
+          <div className="bg-[#0C101A] border border-slate-800 rounded-2xl max-w-lg w-full p-4 sm:p-6 space-y-4 shadow-2xl relative max-h-[90vh] overflow-y-auto custom-scrollbar">
+            
+            {/* Modal Header */}
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="h-8 w-8 rounded-xl bg-gradient-to-tr from-amber-500 to-orange-500 flex items-center justify-center text-black font-black shadow-md shadow-amber-500/20">
+                  <Zap className="h-4 w-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white uppercase tracking-wide">Export Viral Reel</h3>
+                  <p className="text-[10px] text-slate-400 font-mono">Hardware GPU Acceleration &amp; 2K Output</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowExportModal(false)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-all cursor-pointer"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {/* OPTION 1: DEVICE GPU EXPORT (RECOMMENDED) */}
+            <div className="p-4 rounded-xl bg-gradient-to-b from-amber-500/10 to-transparent border border-amber-500/30 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-amber-400 text-sm font-black">⚡ Option 1: Device GPU Export</span>
+                </div>
+                <span className="text-[10px] font-bold text-amber-400 bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 rounded-full">
+                  Recommended • 0s Upload Wait
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-300 leading-relaxed">
+                Uses your device&apos;s graphic card (<span className="text-white font-semibold">NVIDIA / Apple / Intel / Android GPU</span>) to encode locally. Zero cloud upload wait, ultra-high bitrate, and instant download.
+              </p>
+
+              {/* Resolution Picker */}
+              <div className="space-y-1.5 pt-1">
+                <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                  Select Resolution Quality:
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  {[
+                    { id: "2k", label: "2K Quad HD (1440×2560)", desc: "45 Mbps • Ultra Crisp (Pro)", badge: "👑 Top Choice" },
+                    { id: "1080p", label: "1080p Full HD (1080×1920)", desc: "28 Mbps • Standard Viral", badge: "Standard" },
+                    { id: "4k", label: "4K Ultra HD (2160×3840)", desc: "75 Mbps • Cinema Crisp", badge: "Ultra" },
+                    { id: "original", label: "Original Camera Native", desc: "Original file aspect & size", badge: "Native" }
+                  ].map((res) => {
+                    const isSelected = exportResolution === res.id;
+                    return (
+                      <button
+                        key={res.id}
+                        type="button"
+                        onClick={() => setExportResolution(res.id as any)}
+                        className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
+                          isSelected
+                            ? "bg-amber-500/15 border-amber-500 shadow-md shadow-amber-500/10"
+                            : "bg-slate-950/70 border-slate-800 hover:border-slate-700"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between mb-0.5">
+                          <span className={`text-xs font-bold ${isSelected ? "text-amber-400" : "text-white"}`}>
+                            {res.id.toUpperCase()}
+                          </span>
+                          <span className="text-[9px] font-mono text-slate-400">{res.badge}</span>
+                        </div>
+                        <span className="text-[10px] text-slate-300 block font-sans truncate">{res.label}</span>
+                        <span className="text-[9px] text-slate-500 block truncate">{res.desc}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* GPU Start Button */}
+              <button
+                type="button"
+                onClick={() => handleClientSideRender(exportResolution)}
+                className="w-full h-11 rounded-xl bg-gradient-to-r from-amber-500 via-amber-400 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black font-black text-xs flex items-center justify-center gap-2 shadow-lg shadow-amber-500/25 active:scale-95 transition-all cursor-pointer mt-2"
+              >
+                <Zap className="h-4 w-4" />
+                <span>Start {exportResolution.toUpperCase()} GPU Export (Instant Download)</span>
+              </button>
+            </div>
+
+            {/* DIVIDER */}
+            <div className="flex items-center gap-3 my-1">
+              <div className="h-px bg-slate-800 flex-1" />
+              <span className="text-[10px] text-slate-500 font-mono uppercase tracking-wider">or Cloud Storage</span>
+              <div className="h-px bg-slate-800 flex-1" />
+            </div>
+
+            {/* OPTION 2: CLOUD SERVER EXPORT */}
+            <div className="p-3.5 rounded-xl bg-slate-900/60 border border-slate-800 flex items-center justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs font-bold text-slate-200">☁️ Option 2: Cloud FFmpeg Render</span>
+                </div>
+                <p className="text-[10px] text-slate-400 mt-0.5">
+                  Renders on backend and uploads to Cloudflare R2 with a 7-day share link.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowExportModal(false);
+                  handleRenderVideo();
+                }}
+                className="h-9 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs shrink-0 transition-all cursor-pointer border border-slate-700"
+              >
+                Cloud Render
+              </button>
+            </div>
+
           </div>
         </div>
       )}

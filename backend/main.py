@@ -40,29 +40,103 @@ BASE_DIR = Path(__file__).resolve().parent
 OUTPUTS_DIR = BASE_DIR / "outputs"
 OUTPUTS_DIR.mkdir(exist_ok=True)
 
+# Zero-Wait Background Upload Cache Directory
+RAW_CACHE_DIR = OUTPUTS_DIR / "raw_cache"
+RAW_CACHE_DIR.mkdir(exist_ok=True)
+cached_videos: Dict[str, Dict[str, Any]] = {}
+
+def cleanup_old_raw_videos(ttl_seconds: int = 10800):
+    """Deletes cached raw videos older than 3 hours to prevent disk saturation."""
+    try:
+        now = time.time()
+        for f in RAW_CACHE_DIR.glob("*"):
+            if f.is_file() and (now - f.stat().st_mtime) > ttl_seconds:
+                try:
+                    f.unlink()
+                except Exception:
+                    pass
+        expired_ids = [vid for vid, v in cached_videos.items() if (now - v.get("created_at", 0)) > ttl_seconds]
+        for vid in expired_ids:
+            cached_videos.pop(vid, None)
+    except Exception:
+        pass
+
 # TASK 1: In-process job queue & concurrency control
 render_semaphore = asyncio.Semaphore(1) # Concurrency limited to 1 for free 2-vCPU tier
 render_jobs: Dict[str, Dict[str, Any]] = {}
 
-# Load .env if present
+# Load .env if present (checks both backend dir and project root)
 def load_env_file():
-    env_file = BASE_DIR / ".env"
-    if env_file.exists():
-        try:
-            for line in env_file.read_text(encoding="utf-8").splitlines():
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    k, v = line.split("=", 1)
-                    k = k.strip()
-                    v = v.strip().strip("'\"")
-                    if k in ["GROQ_API_KEY", "QROQ_API_KEY"]:
-                        os.environ["GROQ_API_KEY"] = v
-                    else:
-                        os.environ[k] = v
-        except Exception:
-            pass
+    for env_path in [BASE_DIR / ".env", BASE_DIR.parent / ".env"]:
+        if env_path.exists():
+            try:
+                for line in env_path.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        k = k.strip()
+                        v = v.strip().strip("'\"")
+                        if k in ["GROQ_API_KEY", "QROQ_API_KEY"]:
+                            os.environ["GROQ_API_KEY"] = v
+                        else:
+                            os.environ[k] = v
+            except Exception:
+                pass
 
 load_env_file()
+
+def get_r2_client():
+    """Initializes and returns boto3 S3 client for Cloudflare R2 if credentials exist."""
+    account_id = os.getenv("R2_ACCOUNT_ID")
+    access_key = os.getenv("R2_ACCESS_KEY_ID")
+    secret_key = os.getenv("R2_SECRET_ACCESS_KEY")
+    if account_id and access_key and secret_key:
+        try:
+            import boto3
+            endpoint_url = f"https://{account_id}.r2.cloudflarestorage.com"
+            s3 = boto3.client(
+                "s3",
+                endpoint_url=endpoint_url,
+                aws_access_key_id=access_key,
+                aws_secret_access_key=secret_key,
+                region_name="auto"
+            )
+            return s3
+        except Exception as e:
+            print(f"[R2 Init Error] {e}", flush=True)
+            return None
+    return None
+
+def upload_file_to_r2(local_file_path: str, r2_key: str, content_type: str = "video/mp4") -> Optional[str]:
+    """
+    Uploads rendered captioned video to Cloudflare R2 for 7-day storage.
+    Returns the public CDN link or 7-day presigned download link.
+    """
+    s3 = get_r2_client()
+    if not s3:
+        return None
+    bucket = os.getenv("R2_BUCKET_NAME", "toolshub")
+    public_base = os.getenv("CLOUDFLARE_R2_PUBLIC_URL", "").rstrip("/")
+    try:
+        s3.upload_file(
+            local_file_path,
+            bucket,
+            r2_key,
+            ExtraArgs={"ContentType": content_type}
+        )
+        if public_base:
+            return f"{public_base}/{r2_key}"
+        # Fallback to 7-day presigned S3 URL (604,800 seconds)
+        presigned_url = s3.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": bucket, "Key": r2_key},
+            ExpiresIn=604800
+        )
+        return presigned_url
+    except Exception as e:
+        print(f"[R2 Upload Error] Failed to upload {r2_key}: {e}", flush=True)
+        return None
+
 
 def resolve_ffmpeg_path() -> str:
     local_bin = BASE_DIR / "bin" / "ffmpeg.exe"
@@ -110,6 +184,8 @@ def read_root():
             "/api/transcribe",
             "/api/preview",
             "/api/render",
+            "/api/upload-raw",
+            "/api/render-cached",
             "/api/upscale",
             "/api/voice/languages",
             "/api/voice/clone",
@@ -419,6 +495,18 @@ async def process_render_job(job_id: str, params: dict):
             job["result_url"] = f"/api/render/{job_id}/download"
             print(f"🎉 [Job {job_id[:8]}] Ready for download ({out_size_mb:.2f} MB): {output_video}", flush=True)
 
+            # Cloudflare R2 Upload for 7-Day Storage & Direct Shareable Link
+            cloud_url = None
+            try:
+                r2_key = f"reels/{job_id}.mp4"
+                cloud_url = upload_file_to_r2(output_video, r2_key=r2_key, content_type="video/mp4")
+                if cloud_url:
+                    print(f"☁️ [Job {job_id[:8]}] Stored in Cloudflare R2: {cloud_url}", flush=True)
+            except Exception as r2_err:
+                print(f"⚠️ [Job {job_id[:8]}] R2 upload skipped or failed: {r2_err}", flush=True)
+
+            job["cloud_url"] = cloud_url or f"/api/render/{job_id}/download"
+
         except Exception as e:
             print(f"❌ [Job {job_id[:8]} Failed] {e}", flush=True)
             job["status"] = "failed"
@@ -426,12 +514,13 @@ async def process_render_job(job_id: str, params: dict):
             job["stage"] = f"Failed: {str(e)}"
 
         finally:
-            # Clean up intermediate files
-            if Path(input_video).exists():
+            # Clean up intermediate files (Do NOT unlink if raw video is cached in pool)
+            if not params.get("is_cached", False) and Path(input_video).exists():
                 try:
                     Path(input_video).unlink()
                 except Exception:
                     pass
+
             if Path(temp_ass).exists():
                 try:
                     Path(temp_ass).unlink()
@@ -567,6 +656,7 @@ async def render_reel(
         "progress": 0,
         "stage": "Queued in render queue...",
         "result_url": None,
+        "cloud_url": None,
         "error": None,
         "created_at": time.time(),
         "filename": file.filename,
@@ -595,7 +685,8 @@ async def render_reel(
         "resolved_bgm_path": resolved_bgm_path,
         "bg_music_volume": float(bg_music_volume),
         "enable_auto_ducking": bool(enable_auto_ducking),
-        "bg_music_start_offset": float(bg_music_start_offset)
+        "bg_music_start_offset": float(bg_music_start_offset),
+        "is_cached": False
     }
 
     # Dispatch non-blocking background task
@@ -609,10 +700,215 @@ async def render_reel(
         "status_url": f"/api/render/{job_id}"
     }
 
+@app.post("/api/upload-raw")
+async def upload_raw_video(file: UploadFile = File(...)):
+    """
+    Submagic Zero-Wait Model (Step 1):
+    Silently caches the raw user video to disk as soon as it's dropped or selected on canvas.
+    Returns a unique `video_id` immediately so subsequent export takes 0s upload time.
+    """
+    video_id = str(uuid.uuid4())[:12]
+    safe_filename = re.sub(r'[^a-zA-Z0-9_.-]', '_', file.filename or "video.mp4")
+    cache_path = RAW_CACHE_DIR / f"{video_id}_{safe_filename}"
+
+    with open(cache_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    file_size_mb = cache_path.stat().st_size / (1024 * 1024) if cache_path.exists() else 0
+    print(f"⚡ [Submagic Background Upload] Cached video ID {video_id} ({file_size_mb:.2f} MB): {safe_filename}", flush=True)
+
+    cached_videos[video_id] = {
+        "video_id": video_id,
+        "filename": safe_filename,
+        "file_path": str(cache_path),
+        "size_mb": file_size_mb,
+        "created_at": time.time()
+    }
+
+    cleanup_old_raw_videos()
+
+    return {
+        "status": "success",
+        "video_id": video_id,
+        "filename": safe_filename,
+        "size_mb": round(file_size_mb, 2),
+        "message": "Video cached successfully for zero-wait instant export"
+    }
+
+@app.post("/api/render-cached")
+async def render_cached_reel(
+    video_id: str = Form(...),
+    words_json: Optional[str] = Form(None),
+    style_name: str = Form("Hormozi Boxed 2.0 (Solid Box Behind Word)"),
+    words_per_chunk: int = Form(3),
+    caption_position: str = Form("Lower Third (Reels Standard)"),
+    font_size: int = Form(110),
+    export_resolution: str = Form("1080p"),
+    enable_emojis: bool = Form(True),
+    font_choice: str = Form("Arial Black (Bold Trending)"),
+    custom_font: Optional[UploadFile] = File(None),
+    remove_silence: bool = Form(False),
+    enable_sfx: bool = Form(False),
+    sfx_style: str = Form("Dynamic Auto"),
+    sfx_volume: float = Form(0.6),
+    groq_api_key: Optional[str] = Form(None),
+    language: str = Form("Auto-detect"),
+    bg_music_id: Optional[str] = Form(None),
+    bg_music_url: Optional[str] = Form(None),
+    bg_music_volume: float = Form(0.20),
+    enable_auto_ducking: bool = Form(True),
+    custom_bg_music: Optional[UploadFile] = File(None),
+    bg_music_start_offset: float = Form(0.0)
+):
+    """
+    Submagic Zero-Wait Export (Step 2):
+    Burns subtitles, SFX, and ducked audio on previously cached video via video_id.
+    Zero-upload wait time (10KB request payload instead of 200MB)!
+    """
+    input_video_path = None
+    original_filename = "video.mp4"
+    if video_id in cached_videos and Path(cached_videos[video_id]["file_path"]).exists():
+        input_video_path = Path(cached_videos[video_id]["file_path"])
+        original_filename = cached_videos[video_id]["filename"]
+    else:
+        matches = list(RAW_CACHE_DIR.glob(f"{video_id}_*"))
+        if matches and matches[0].exists():
+            input_video_path = matches[0]
+            original_filename = input_video_path.name.split("_", 1)[-1]
+
+    if not input_video_path or not input_video_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Cached video with ID '{video_id}' was not found or has expired. Please re-select your video."
+        )
+
+    ffmpeg_bin = resolve_ffmpeg_path()
+    file_id = str(uuid.uuid4())[:8]
+    is_4k = "4K" in export_resolution
+    prefix = "4k_captioned" if is_4k else "captioned"
+    output_video_path = OUTPUTS_DIR / f"{prefix}_{file_id}.mp4"
+    temp_ass_path = OUTPUTS_DIR / f"temp_{file_id}.ass"
+    temp_sfx_path = OUTPUTS_DIR / f"temp_sfx_{file_id}.wav"
+
+    custom_font_path = None
+    if custom_font:
+        custom_font_path = str(OUTPUTS_DIR / f"font_{file_id}_{custom_font.filename}")
+        with open(custom_font_path, "wb") as f_buffer:
+            shutil.copyfileobj(custom_font.file, f_buffer)
+
+    custom_bgm_path = None
+    if custom_bg_music:
+        custom_bgm_path = str(OUTPUTS_DIR / f"bgm_{file_id}_{custom_bg_music.filename}")
+        with open(custom_bgm_path, "wb") as bgm_buf:
+            shutil.copyfileobj(custom_bg_music.file, bgm_buf)
+
+    # Resolve words
+    if words_json and words_json.strip():
+        try:
+            words = json.loads(words_json)
+        except Exception:
+            words = parse_editable_text_to_words(words_json)
+    else:
+        effective_key = (groq_api_key or "").strip() or os.getenv("GROQ_API_KEY", "").strip()
+        if effective_key:
+            words = transcribe_audio_groq(
+                video_path=str(input_video_path),
+                api_key=effective_key,
+                language=language,
+                ffmpeg_path=ffmpeg_bin
+            )
+        else:
+            words = transcribe_audio_whisper(
+                video_path=str(input_video_path),
+                model_size="tiny",
+                language=language
+            )
+
+    if not words:
+        raise HTTPException(status_code=400, detail="No speech words detected or provided.")
+
+    # Font setup
+    ass_font, font_file_path = resolve_font_info(font_choice=font_choice, custom_font_path=custom_font_path)
+    fonts_dir = str(Path(font_file_path).parent) if font_file_path else None
+
+    # Resolve Background Music Track
+    resolved_bgm_path = None
+    if custom_bgm_path and Path(custom_bgm_path).exists():
+        resolved_bgm_path = custom_bgm_path
+    elif bg_music_url and bg_music_url.strip().startswith("http"):
+        try:
+            import urllib.request
+            remote_bgm_file = OUTPUTS_DIR / f"remote_bgm_{file_id}.wav"
+            urllib.request.urlretrieve(bg_music_url.strip(), str(remote_bgm_file))
+            if remote_bgm_file.exists() and remote_bgm_file.stat().st_size > 500:
+                resolved_bgm_path = str(remote_bgm_file)
+        except Exception as e:
+            print(f"[Remote BGM Download Error] {e}", flush=True)
+    elif bg_music_id and bg_music_id not in ["none", ""]:
+        for track in BGM_PRESET_LIBRARY:
+            if track["id"] == bg_music_id:
+                possible_path = BASE_DIR / "assets" / "bgm" / track["file"]
+                if possible_path.exists():
+                    resolved_bgm_path = str(possible_path)
+                break
+
+    # Register job in queue
+    job_id = str(uuid.uuid4())
+    render_jobs[job_id] = {
+        "job_id": job_id,
+        "status": "queued",
+        "progress": 0,
+        "stage": "Queued in zero-wait render queue...",
+        "result_url": None,
+        "cloud_url": None,
+        "error": None,
+        "created_at": time.time(),
+        "filename": original_filename,
+        "output_video_path": str(output_video_path)
+    }
+
+    job_params = {
+        "input_video_path": str(input_video_path),
+        "output_video_path": str(output_video_path),
+        "temp_ass_path": str(temp_ass_path),
+        "temp_sfx_path": str(temp_sfx_path),
+        "custom_font_path": custom_font_path,
+        "ffmpeg_bin": ffmpeg_bin,
+        "words": words,
+        "style_name": style_name,
+        "ass_font": ass_font,
+        "font_size": int(font_size),
+        "caption_position": caption_position,
+        "words_per_chunk": int(words_per_chunk),
+        "is_4k": is_4k,
+        "enable_emojis": enable_emojis,
+        "enable_sfx": enable_sfx,
+        "sfx_style": sfx_style,
+        "sfx_volume": float(sfx_volume),
+        "fonts_dir": fonts_dir,
+        "resolved_bgm_path": resolved_bgm_path,
+        "bg_music_volume": float(bg_music_volume),
+        "enable_auto_ducking": bool(enable_auto_ducking),
+        "bg_music_start_offset": float(bg_music_start_offset),
+        "is_cached": True
+    }
+
+    # Dispatch non-blocking background task
+    asyncio.create_task(process_render_job(job_id, job_params))
+
+    return {
+        "job_id": job_id,
+        "status": "queued",
+        "progress": 0,
+        "stage": "Zero-wait export initialized...",
+        "status_url": f"/api/render/{job_id}"
+    }
+
 @app.get("/api/render/{job_id}")
 async def get_render_job_status(job_id: str):
     """
     TASK 1: Polling endpoint called by frontend every 2 seconds.
+    Returns status, progress, stage, result_url, and 7-day cloud_url.
     """
     job = render_jobs.get(job_id)
     if not job:
@@ -623,6 +919,7 @@ async def get_render_job_status(job_id: str):
         "progress": job["progress"],
         "stage": job.get("stage", ""),
         "result_url": job.get("result_url"),
+        "cloud_url": job.get("cloud_url"),
         "error": job.get("error")
     }
 
@@ -647,6 +944,7 @@ async def download_render_job(job_id: str):
         media_type="video/mp4",
         filename=f"viral_reel_{job_id[:8]}.mp4"
     )
+
 
 @app.post("/api/upscale")
 async def upscale_image(

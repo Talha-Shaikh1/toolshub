@@ -23,11 +23,14 @@ import {
   Code2,
   Check,
   Star,
-  Play
+  Play,
+  Menu,
+  X
 } from "lucide-react";
 
 export default function Home() {
   const [openFaq, setOpenFaq] = useState<number | null>(null);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
 
   const toggleFaq = (index: number) => {
     setOpenFaq(openFaq === index ? null : index);
@@ -36,24 +39,24 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-[#07090E] text-slate-100 flex flex-col font-sans selection:bg-amber-500 selection:text-black">
       {/* 1. GLOBAL NAVIGATION HEADER */}
-      <header className="sticky top-0 z-50 h-16 border-b border-slate-800/80 bg-[#0B0E17]/80 backdrop-blur-md px-6 lg:px-12 flex items-center justify-between">
+      <header className="sticky top-0 z-50 h-16 border-b border-slate-800/80 bg-[#0B0E17]/90 backdrop-blur-md px-4 sm:px-6 lg:px-12 flex items-center justify-between">
         {/* Brand */}
-        <div className="flex items-center gap-3">
-          <div className="h-9 w-9 rounded-xl bg-gradient-to-tr from-amber-500 via-orange-500 to-red-600 flex items-center justify-center shadow-lg shadow-amber-500/20">
-            <Flame className="h-5 w-5 text-black font-black" />
+        <div className="flex items-center gap-2.5 sm:gap-3">
+          <div className="h-8 w-8 sm:h-9 sm:w-9 rounded-xl bg-gradient-to-tr from-amber-500 via-orange-500 to-red-600 flex items-center justify-center shadow-lg shadow-amber-500/20">
+            <Flame className="h-4 w-4 sm:h-5 sm:w-5 text-black font-black" />
           </div>
           <div className="flex flex-col">
-            <span className="text-sm font-black tracking-wider uppercase bg-gradient-to-r from-amber-400 via-orange-300 to-red-500 bg-clip-text text-transparent">
+            <span className="text-xs sm:text-sm font-black tracking-wider uppercase bg-gradient-to-r from-amber-400 via-orange-300 to-red-500 bg-clip-text text-transparent">
               FlowCreator OS
             </span>
-            <span className="text-[10px] font-mono text-slate-400 -mt-0.5">
+            <span className="text-[9px] sm:text-[10px] font-mono text-slate-400 -mt-0.5">
               AI Creator Tools Hub
             </span>
           </div>
         </div>
 
         {/* Desktop Nav Links */}
-        <nav className="hidden md:flex items-center gap-8 text-xs font-semibold text-slate-300">
+        <nav className="hidden md:flex items-center gap-6 lg:gap-8 text-xs font-semibold text-slate-300">
           <a href="#tools" className="hover:text-amber-400 transition-colors">
             Tools Suite
           </a>
@@ -68,17 +71,99 @@ export default function Home() {
           </a>
         </nav>
 
-        {/* Header Action Button */}
-        <div className="flex items-center gap-3">
+        {/* Header Action Button & Mobile Menu Toggle */}
+        <div className="flex items-center gap-2 sm:gap-3">
           <Link
             href="/studio"
-            className="h-9 px-4 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black font-extrabold text-xs flex items-center gap-1.5 shadow-md shadow-amber-500/20 active:scale-95 transition-all"
+            className="h-8 sm:h-9 px-3 sm:px-4 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black font-extrabold text-xs flex items-center gap-1.5 shadow-md shadow-amber-500/20 active:scale-95 transition-all"
           >
             <Video className="h-3.5 w-3.5 text-black" />
-            <span>Launch Studio</span>
+            <span className="hidden xs:inline">Launch Studio</span>
+            <span className="xs:hidden">Studio</span>
           </Link>
+
+          {/* Mobile Hamburger Toggle */}
+          <button
+            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+            className="md:hidden h-8 w-8 rounded-lg bg-slate-900 border border-slate-800 text-slate-300 hover:text-white flex items-center justify-center transition-all cursor-pointer"
+            aria-label="Toggle Navigation Menu"
+          >
+            {mobileMenuOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
+          </button>
         </div>
       </header>
+
+      {/* Mobile Menu Dropdown Drawer */}
+      {mobileMenuOpen && (
+        <div className="md:hidden sticky top-16 z-40 bg-[#0B0E17]/95 backdrop-blur-xl border-b border-slate-800/80 px-4 py-4 space-y-3 animate-in slide-in-from-top-2">
+          <div className="grid grid-cols-2 gap-2 pb-3 border-b border-slate-800/80 text-xs font-semibold">
+            <Link
+              href="/studio"
+              onClick={() => setMobileMenuOpen(false)}
+              className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-300 flex items-center gap-2"
+            >
+              <Video className="h-4 w-4 text-amber-400" />
+              <span>Caption Studio</span>
+            </Link>
+            <Link
+              href="/upscaler"
+              onClick={() => setMobileMenuOpen(false)}
+              className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-200 flex items-center gap-2"
+            >
+              <Sparkles className="h-4 w-4 text-emerald-400" />
+              <span>4K/8K Upscaler</span>
+            </Link>
+            <Link
+              href="/voice-dubbing"
+              onClick={() => setMobileMenuOpen(false)}
+              className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-200 flex items-center gap-2"
+            >
+              <Zap className="h-4 w-4 text-purple-400" />
+              <span>AI Voice Clone</span>
+            </Link>
+            <Link
+              href="/b-roll"
+              onClick={() => setMobileMenuOpen(false)}
+              className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-200 flex items-center gap-2"
+            >
+              <Layers className="h-4 w-4 text-cyan-400" />
+              <span>B-Roll Splicer</span>
+            </Link>
+          </div>
+
+          <nav className="flex flex-col space-y-2 text-xs font-medium text-slate-300">
+            <a
+              href="#tools"
+              onClick={() => setMobileMenuOpen(false)}
+              className="py-1.5 px-2 rounded hover:bg-slate-900 transition-colors"
+            >
+              Tools Suite
+            </a>
+            <a
+              href="#workflow"
+              onClick={() => setMobileMenuOpen(false)}
+              className="py-1.5 px-2 rounded hover:bg-slate-900 transition-colors"
+            >
+              How It Works
+            </a>
+            <a
+              href="#tech"
+              onClick={() => setMobileMenuOpen(false)}
+              className="py-1.5 px-2 rounded hover:bg-slate-900 transition-colors"
+            >
+              Architecture &amp; API
+            </a>
+            <a
+              href="#faq"
+              onClick={() => setMobileMenuOpen(false)}
+              className="py-1.5 px-2 rounded hover:bg-slate-900 transition-colors"
+            >
+              FAQ
+            </a>
+          </nav>
+        </div>
+      )}
+
 
       {/* 2. HERO SECTION */}
       <section className="relative pt-20 pb-24 px-6 lg:px-12 flex flex-col items-center text-center overflow-hidden">

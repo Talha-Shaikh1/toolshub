@@ -89,52 +89,53 @@ export default function UpscalerPage() {
   };
 
   return (
-    <div className="h-screen w-screen overflow-hidden bg-[#0A0D14] text-slate-100 flex flex-col font-sans select-none">
+    <div className="min-h-screen w-full bg-[#0A0D14] text-slate-100 flex flex-col font-sans select-none overflow-x-hidden">
       {/* Header */}
-      <header className="h-12 border-b border-slate-800/60 bg-[#0E121D] px-4 flex items-center justify-between z-50 shrink-0">
-        <div className="flex items-center gap-3">
+      <header className="h-12 border-b border-slate-800/60 bg-[#0E121D] px-3 sm:px-4 flex items-center justify-between z-50 shrink-0">
+        <div className="flex items-center gap-2 sm:gap-3">
           <Link
             href="/"
             className="flex items-center gap-1 text-slate-400 hover:text-amber-400 text-xs font-semibold px-2 py-1 rounded bg-slate-900 border border-slate-800 transition-all"
             title="Back to Creator Tools Hub"
           >
             <ChevronLeft className="h-3.5 w-3.5" />
-            <span>Hub</span>
+            <span className="hidden sm:inline">Hub</span>
           </Link>
 
           <div className="h-4 w-px bg-slate-800" />
 
-          <div className="flex items-center gap-2">
-            <div className="h-6 w-6 rounded-md bg-gradient-to-tr from-amber-500 to-emerald-500 flex items-center justify-center">
+          <div className="flex items-center gap-1.5 sm:gap-2">
+            <div className="h-6 w-6 rounded-md bg-gradient-to-tr from-amber-500 to-emerald-500 flex items-center justify-center shrink-0">
               <Sparkles className="h-3.5 w-3.5 text-black font-black" />
             </div>
             <span className="text-xs font-bold text-white uppercase tracking-tight">
-              4K / 8K Super-Resolution Lab
+              4K / 8K Upscaler
             </span>
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3">
           <Link
             href="/studio"
-            className="text-xs font-semibold text-amber-400 hover:text-amber-300 flex items-center gap-1 bg-amber-500/10 px-2.5 py-1 rounded border border-amber-500/20"
+            className="text-xs font-semibold text-amber-400 hover:text-amber-300 flex items-center gap-1 bg-amber-500/10 px-2 sm:px-2.5 py-1 rounded border border-amber-500/20"
           >
             <Video className="h-3.5 w-3.5" />
-            <span>Open Caption Studio</span>
+            <span className="hidden sm:inline">Caption Studio</span>
+            <span className="sm:hidden">Studio</span>
           </Link>
         </div>
       </header>
 
       {/* Main Lab Area */}
-      <div className="flex-1 overflow-auto p-6 flex items-center justify-center">
-        <div className="bg-[#0D111D] border border-slate-800/90 rounded-2xl p-6 shadow-2xl max-w-4xl w-full space-y-6">
-          <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+      <div className="flex-1 overflow-auto p-3 sm:p-6 flex items-center justify-center">
+        <div className="bg-[#0D111D] border border-slate-800/90 rounded-2xl p-4 sm:p-6 shadow-2xl max-w-4xl w-full space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-800 pb-3 gap-3">
             <div>
-              <h1 className="text-base font-bold text-white flex items-center gap-2">
+              <h1 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
                 <Sparkles className="h-4 w-4 text-amber-500" />
                 AI Image &amp; Thumbnail Super-Resolution
               </h1>
-              <p className="text-xs text-slate-400">
+              <p className="text-[11px] sm:text-xs text-slate-400">
                 High-order Lanczos interpolation &amp; unsharp micro-texture edge restoration
               </p>
             </div>
@@ -143,13 +144,14 @@ export default function UpscalerPage() {
               <a
                 href={upscaledUrl}
                 download={`enhanced_${upscaleTarget}.png`}
-                className="px-3.5 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black font-extrabold text-xs flex items-center gap-1.5 shadow-lg transition-all"
+                className="w-full sm:w-auto px-3.5 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black font-extrabold text-xs flex items-center justify-center gap-1.5 shadow-lg transition-all"
               >
                 <Download className="h-3.5 w-3.5" />
-                Download Lossless {upscaleTarget} PNG
+                <span>Download {upscaleTarget} PNG</span>
               </a>
             )}
           </div>
+
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {/* Left: Input & Config */}

@@ -1,6 +1,6 @@
-// Client-Side Canvas Video Renderer (0-Upload Instant Device Rendering)
-// Directly renders captioned video on the user's device using GPU Canvas + MediaRecorder
-// Completely eliminates 100MB upload across oceanic cables!
+// Client-Side Canvas Video Renderer (0-Upload Instant Device GPU Rendering)
+// Directly renders captioned video on the user's device using Hardware-Accelerated Canvas + MediaRecorder
+// Supports 1080p, 2K (1440x2560), and 4K (2160x3840) resolutions with zero server wait time!
 
 export interface ClientRenderOptions {
   styleName: string;
@@ -16,6 +16,10 @@ export interface ClientRenderOptions {
   };
   customFontFamily?: string | null;
   playbackRate?: number;
+  resolution?: "original" | "1080p" | "2k" | "4k";
+  bgmAudioUrl?: string | null;
+  bgmVolume?: number;
+  sfxStyle?: string;
 }
 
 const EMOJI_KEYWORDS: Record<string, string> = {
@@ -42,14 +46,15 @@ export function renderCaptionedVideoClientSide(
   options: ClientRenderOptions,
   onProgress?: (pct: number, step: string) => void
 ): Promise<{ blob: Blob; mimeType: string }> {
-  return new Promise((resolve, reject) => {
+  return new Promise(async (resolve, reject) => {
     const video = document.createElement("video");
     const videoUrl = URL.createObjectURL(videoFile);
     video.src = videoUrl;
     video.muted = false;
     video.playsInline = true;
     video.crossOrigin = "anonymous";
-    // Keep video inside visible browser viewport bounds so Chrome GPU decoder does NOT throttle frames
+
+    // Keep video inside viewport so hardware GPU decoder does not throttle frame processing
     video.style.position = "fixed";
     video.style.bottom = "0px";
     video.style.right = "0px";
@@ -60,7 +65,7 @@ export function renderCaptionedVideoClientSide(
     video.style.zIndex = "-1";
     document.body.appendChild(video);
 
-    const playbackSpeed = 1.0; // Strictly 1.0x to preserve 100% natural duration, audio pitch & word sync
+    const playbackSpeed = 1.0; // Strictly 1.0x to preserve audio pitch & precise word sync
 
     let cleanup = () => {
       try {
@@ -75,9 +80,45 @@ export function renderCaptionedVideoClientSide(
 
     video.onloadedmetadata = async () => {
       try {
-        const width = video.videoWidth || 1080;
-        const height = video.videoHeight || 1920;
+        const rawW = video.videoWidth || 1080;
+        const rawH = video.videoHeight || 1920;
+        const aspect = rawW / rawH;
         const duration = video.duration || 15;
+
+        // Determine target dimensions based on selected resolution (Original, 1080p, 2K, 4K)
+        let width = rawW;
+        let height = rawH;
+        const selectedRes = options.resolution || "1080p";
+
+        if (selectedRes === "1080p") {
+          if (rawH >= rawW) {
+            height = 1920;
+            width = Math.round(height * aspect);
+          } else {
+            width = 1920;
+            height = Math.round(width / aspect);
+          }
+        } else if (selectedRes === "2k") {
+          if (rawH >= rawW) {
+            height = 2560; // 2K Quad HD
+            width = Math.round(height * aspect);
+          } else {
+            width = 2560;
+            height = Math.round(width / aspect);
+          }
+        } else if (selectedRes === "4k") {
+          if (rawH >= rawW) {
+            height = 3840; // 4K Ultra HD
+            width = Math.round(height * aspect);
+          } else {
+            width = 3840;
+            height = Math.round(width / aspect);
+          }
+        }
+
+        // Ensure even dimensions required by video encoders
+        width = width % 2 === 0 ? width : width + 1;
+        height = height % 2 === 0 ? height : height + 1;
 
         const canvas = document.createElement("canvas");
         canvas.width = width;
@@ -85,17 +126,75 @@ export function renderCaptionedVideoClientSide(
         const ctx = canvas.getContext("2d", { alpha: false });
         if (!ctx) throw new Error("Could not create 2D canvas context");
 
-        // Audio capture using Web Audio API
+        // High quality GPU image smoothing
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
+
+        // Web Audio API destination for mixing video audio + BGM + SFX
         const AudioCtxClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
         const audioCtx = new AudioCtxClass();
-        const source = audioCtx.createMediaElementSource(video);
         const dest = audioCtx.createMediaStreamDestination();
-        source.connect(dest);
+
+        // 1. Source Video Audio
+        const videoSource = audioCtx.createMediaElementSource(video);
+        videoSource.connect(dest);
+
+        // 2. Background Music (BGM)
+        let bgmAudio: HTMLAudioElement | null = null;
+        if (options.bgmAudioUrl) {
+          try {
+            bgmAudio = new Audio(options.bgmAudioUrl);
+            bgmAudio.crossOrigin = "anonymous";
+            bgmAudio.loop = true;
+            const bgmSource = audioCtx.createMediaElementSource(bgmAudio);
+            const bgmGain = audioCtx.createGain();
+            bgmGain.gain.value = options.bgmVolume ?? 0.20;
+            bgmSource.connect(bgmGain);
+            bgmGain.connect(dest);
+          } catch (bgmErr) {
+            console.warn("Could not attach BGM to audio mix:", bgmErr);
+          }
+        }
+
+        // 3. Sound Effects (SFX) Audio Buffers
+        const sfxBuffers: Record<string, AudioBuffer> = {};
+        if (options.sfxStyle && options.sfxStyle !== "None") {
+          const loadSfxBuffer = async (name: string, url: string) => {
+            try {
+              const res = await fetch(url);
+              if (res.ok) {
+                const ab = await res.arrayBuffer();
+                sfxBuffers[name] = await audioCtx.decodeAudioData(ab);
+              }
+            } catch {}
+          };
+          await Promise.allSettled([
+            loadSfxBuffer("pop", "/audio/sfx/pop.wav"),
+            loadSfxBuffer("ding", "/audio/sfx/ding.wav"),
+            loadSfxBuffer("swoosh", "/audio/sfx/swoosh.wav")
+          ]);
+        }
+
+        const triggeredWords = new Set<number>();
+        const playSfx = (type: "pop" | "ding" | "swoosh") => {
+          const buf = sfxBuffers[type];
+          if (buf && audioCtx.state === "running") {
+            try {
+              const s = audioCtx.createBufferSource();
+              s.buffer = buf;
+              const g = audioCtx.createGain();
+              g.gain.value = 0.7;
+              s.connect(g);
+              g.connect(dest);
+              s.start();
+            } catch {}
+          }
+        };
 
         // Canvas video stream (30 fps)
         const canvasStream = canvas.captureStream(30);
 
-        // Combine canvas video + element audio
+        // Combine canvas video + mixed audio destination
         const combinedStream = new MediaStream([
           ...canvasStream.getVideoTracks(),
           ...dest.stream.getAudioTracks()
@@ -104,8 +203,8 @@ export function renderCaptionedVideoClientSide(
         // Supported MIME type selection
         let selectedMime = "video/webm;codecs=vp9,opus";
         if (typeof MediaRecorder !== "undefined") {
-          if (MediaRecorder.isTypeSupported("video/mp4;codecs=avc1,mp4a.40.2")) {
-            selectedMime = "video/mp4;codecs=avc1,mp4a.40.2";
+          if (MediaRecorder.isTypeSupported("video/mp4;codecs=avc1.4d002a,mp4a.40.2")) {
+            selectedMime = "video/mp4;codecs=avc1.4d002a,mp4a.40.2";
           } else if (MediaRecorder.isTypeSupported("video/mp4")) {
             selectedMime = "video/mp4";
           } else if (MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")) {
@@ -115,9 +214,13 @@ export function renderCaptionedVideoClientSide(
           }
         }
 
-        // Calculate exact bitrate from original file size to preserve exact MBs without compression loss
-        const computedBitrate = Math.round((videoFile.size * 8) / Math.max(1, duration));
-        const targetBitrate = Math.max(25_000_000, computedBitrate);
+        // Quality Bitrate settings based on resolution
+        let targetBitrate = 28_000_000; // 28 Mbps for 1080p
+        if (selectedRes === "2k") {
+          targetBitrate = 45_000_000; // 45 Mbps for 2K
+        } else if (selectedRes === "4k") {
+          targetBitrate = 75_000_000; // 75 Mbps for 4K
+        }
 
         const recorder = new MediaRecorder(combinedStream, {
           mimeType: selectedMime,
@@ -136,7 +239,14 @@ export function renderCaptionedVideoClientSide(
             video.pause();
             video.src = "";
             URL.revokeObjectURL(videoUrl);
+            if (bgmAudio) {
+              bgmAudio.pause();
+              bgmAudio.src = "";
+            }
             audioCtx.close().catch(() => {});
+            if (video.parentNode) {
+              video.parentNode.removeChild(video);
+            }
           } catch {}
         };
 
@@ -164,7 +274,7 @@ export function renderCaptionedVideoClientSide(
         }
 
         const baseFontSize = options.fontSize || 70;
-        // Scale to 1080p native height standard (1920)
+        // Scale to 1080p standard height (1920)
         const scaleFactor = height / 1920;
         const renderFontSize = Math.max(36, Math.round(baseFontSize * scaleFactor));
         const wordsPerChunk = options.wordsPerChunk || 3;
@@ -179,7 +289,7 @@ export function renderCaptionedVideoClientSide(
         const drawFrame = () => {
           if (!isRendering) return;
 
-          // 1. Draw raw video frame
+          // 1. Draw raw video frame with high quality GPU smoothing
           ctx.drawImage(video, 0, 0, width, height);
 
           // 2. Find active word and chunk
@@ -196,6 +306,31 @@ export function renderCaptionedVideoClientSide(
           }
 
           if (wordsList.length > 0 && foundIdx >= 0) {
+            const activeWordObj = wordsList[foundIdx];
+            const rawWord = activeWordObj.word.toUpperCase();
+
+            // Trigger SFX once per active word
+            if (!triggeredWords.has(foundIdx) && options.sfxStyle && options.sfxStyle !== "None") {
+              triggeredWords.add(foundIdx);
+              const emoji = getWordEmoji(rawWord);
+              if (options.sfxStyle.includes("Ding")) {
+                if (emoji || ["WIN", "MONEY", "DOLLAR", "GOLD", "PROFIT"].some(k => rawWord.includes(k))) {
+                  playSfx("ding");
+                }
+              } else if (options.sfxStyle.includes("Pop")) {
+                if (emoji) playSfx("pop");
+              } else {
+                // Dynamic Auto
+                if (["💰", "💵", "🤑", "💎", "🏆", "🥇"].includes(emoji) || ["WIN", "MONEY", "DOLLAR", "RICH"].some(k => rawWord.includes(k))) {
+                  playSfx("ding");
+                } else if (["🚀", "⚡", "🏎️", "💥", "🔥"].includes(emoji) || ["VIRAL", "FIRE", "BOOM", "FAST"].some(k => rawWord.includes(k))) {
+                  playSfx("swoosh");
+                } else if (emoji) {
+                  playSfx("pop");
+                }
+              }
+            }
+
             const chunkIdx = Math.floor(foundIdx / wordsPerChunk);
             const startIdx = chunkIdx * wordsPerChunk;
             const chunk = wordsList.slice(startIdx, startIdx + wordsPerChunk);
@@ -237,8 +372,8 @@ export function renderCaptionedVideoClientSide(
 
                   ctx.save();
                   ctx.fillStyle = options.activeStyle.badge;
-                  ctx.shadowColor = "rgba(0,0,0,0.8)";
-                  ctx.shadowBlur = Math.round(15 * scaleFactor);
+                  ctx.shadowColor = "rgba(0,0,0,0.85)";
+                  ctx.shadowBlur = Math.round(16 * scaleFactor);
                   ctx.beginPath();
                   if (ctx.roundRect) {
                     ctx.roundRect(bx, by, bw, bh, radius);
@@ -258,8 +393,8 @@ export function renderCaptionedVideoClientSide(
                   ctx.save();
                   ctx.lineWidth = Math.round(12 * scaleFactor);
                   ctx.strokeStyle = "rgba(0,0,0,0.95)";
-                  ctx.shadowColor = "rgba(0,0,0,0.8)";
-                  ctx.shadowBlur = Math.round(12 * scaleFactor);
+                  ctx.shadowColor = "rgba(0,0,0,0.85)";
+                  ctx.shadowBlur = Math.round(14 * scaleFactor);
                   ctx.strokeText(it.display, curX, targetY);
                   ctx.fillStyle = options.activeStyle.badge;
                   ctx.fillText(it.display, curX, targetY);
@@ -270,7 +405,7 @@ export function renderCaptionedVideoClientSide(
                 ctx.save();
                 ctx.lineWidth = Math.round(10 * scaleFactor);
                 ctx.strokeStyle = "rgba(0,0,0,0.95)";
-                ctx.shadowColor = "rgba(0,0,0,0.6)";
+                ctx.shadowColor = "rgba(0,0,0,0.65)";
                 ctx.shadowBlur = Math.round(8 * scaleFactor);
                 ctx.strokeText(it.display, curX, targetY);
                 ctx.fillStyle = "#FFFFFF";
@@ -282,10 +417,11 @@ export function renderCaptionedVideoClientSide(
             });
           }
 
-          // Progress callback
+          // Progress callback with resolution label
           if (onProgress && duration > 0) {
             const pct = Math.min(99, Math.round((video.currentTime / duration) * 100));
-            onProgress(pct, `Rendering frame: ${video.currentTime.toFixed(1)}s / ${duration.toFixed(1)}s`);
+            const resLabel = selectedRes === "2k" ? "2K Quad HD (1440×2560)" : selectedRes === "4k" ? "4K Ultra HD" : "1080p Full HD";
+            onProgress(pct, `⚡ GPU Rendering ${resLabel}: ${pct}% (${video.currentTime.toFixed(1)}s / ${duration.toFixed(1)}s)`);
           }
 
           if ("requestVideoFrameCallback" in video) {
@@ -296,7 +432,7 @@ export function renderCaptionedVideoClientSide(
         };
 
         video.onended = () => {
-          if (onProgress) onProgress(100, "Finalizing final frames...");
+          if (onProgress) onProgress(100, "Finalizing frames on device GPU...");
           setTimeout(() => {
             isRendering = false;
             if (recorder.state === "recording") {
@@ -310,6 +446,10 @@ export function renderCaptionedVideoClientSide(
         video.playbackRate = playbackSpeed;
         video.currentTime = 0;
         await video.play();
+        if (bgmAudio) {
+          bgmAudio.currentTime = 0;
+          bgmAudio.play().catch(() => {});
+        }
 
         if ("requestVideoFrameCallback" in video) {
           (video as any).requestVideoFrameCallback(drawFrame);

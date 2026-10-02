@@ -133,53 +133,53 @@ export default function VoiceDubbingPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[#07090F] text-slate-100 flex flex-col font-sans selection:bg-amber-500 selection:text-black">
+    <div className="min-h-screen bg-[#07090F] text-slate-100 flex flex-col font-sans selection:bg-amber-500 selection:text-black overflow-x-hidden">
       {/* 1. TOP HEADER */}
-      <header className="h-14 border-b border-slate-800/80 bg-[#0B0E17]/90 backdrop-blur-md px-6 flex items-center justify-between z-50 shrink-0">
-        <div className="flex items-center gap-4">
+      <header className="h-14 border-b border-slate-800/80 bg-[#0B0E17]/90 backdrop-blur-md px-3 sm:px-6 flex items-center justify-between z-50 shrink-0">
+        <div className="flex items-center gap-2 sm:gap-4">
           <Link
             href="/"
             className="flex items-center gap-1.5 text-slate-400 hover:text-amber-400 text-xs font-semibold px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 transition-all"
           >
             <ChevronLeft className="h-3.5 w-3.5" />
-            <span>Hub</span>
+            <span className="hidden sm:inline">Hub</span>
           </Link>
 
           <div className="h-4 w-px bg-slate-800" />
 
-          <div className="flex items-center gap-2.5">
-            <div className="h-7 w-7 rounded-lg bg-gradient-to-tr from-purple-500 to-indigo-600 flex items-center justify-center shadow-md shadow-purple-500/20">
+          <div className="flex items-center gap-2 sm:gap-2.5">
+            <div className="h-7 w-7 rounded-lg bg-gradient-to-tr from-purple-500 to-indigo-600 flex items-center justify-center shadow-md shadow-purple-500/20 shrink-0">
               <Mic className="h-4 w-4 text-white" />
             </div>
             <div>
               <span className="text-xs font-bold text-white uppercase tracking-tight block">
                 AI Voice Clone &amp; Dubbing
               </span>
-              <span className="text-[10px] text-slate-500 font-mono">FlowCreator OS • Workstation 3</span>
+              <span className="text-[10px] text-slate-500 font-mono hidden sm:block">FlowCreator OS • Workstation 3</span>
             </div>
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3">
           <Link
             href="/studio"
-            className="text-xs text-slate-400 hover:text-white px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 transition-all hidden sm:flex items-center gap-1.5"
+            className="text-xs text-slate-400 hover:text-white px-2.5 sm:px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 transition-all flex items-center gap-1.5"
           >
             <Video className="h-3.5 w-3.5 text-amber-400" />
-            <span>Caption Studio</span>
+            <span className="hidden sm:inline">Caption Studio</span>
           </Link>
           <Link
             href="/b-roll"
-            className="text-xs text-slate-400 hover:text-white px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 transition-all hidden sm:flex items-center gap-1.5"
+            className="text-xs text-slate-400 hover:text-white px-2.5 sm:px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 transition-all flex items-center gap-1.5"
           >
             <Layers className="h-3.5 w-3.5 text-cyan-400" />
-            <span>B-Roll Splicer</span>
+            <span className="hidden sm:inline">B-Roll Splicer</span>
           </Link>
         </div>
       </header>
 
       {/* 2. MAIN WORKSTATION WORKSPACE */}
-      <main className="flex-1 max-w-6xl mx-auto w-full p-6 grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+      <main className="flex-1 max-w-6xl mx-auto w-full p-3 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 sm:gap-8 items-start">
         {/* LEFT COLUMN: CONTROLS & INPUTS (7 COLS) */}
         <div className="lg:col-span-7 space-y-6">
           {/* Audio Upload Box */}
