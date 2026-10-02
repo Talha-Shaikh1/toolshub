@@ -214,17 +214,21 @@ export function renderCaptionedVideoClientSide(
           }
         }
 
-        // Quality Bitrate settings based on resolution
-        let targetBitrate = 28_000_000; // 28 Mbps for 1080p
+        // Match or EXCEED the input camera file's exact bitrate (Zero Compression Drop)
+        const inputBytes = videoFile.size || 50_000_000;
+        const rawCameraBitrate = Math.round((inputBytes * 8) / Math.max(1, duration));
+        
+        let targetBitrate = Math.max(rawCameraBitrate, 35_000_000);
         if (selectedRes === "2k") {
-          targetBitrate = 45_000_000; // 45 Mbps for 2K
+          targetBitrate = Math.max(Math.round(rawCameraBitrate * 1.4), 60_000_000);
         } else if (selectedRes === "4k") {
-          targetBitrate = 75_000_000; // 75 Mbps for 4K
+          targetBitrate = Math.max(Math.round(rawCameraBitrate * 2.2), 95_000_000);
         }
 
         const recorder = new MediaRecorder(combinedStream, {
           mimeType: selectedMime,
-          videoBitsPerSecond: targetBitrate
+          videoBitsPerSecond: targetBitrate,
+          audioBitsPerSecond: 320_000
         });
 
         const recordedChunks: Blob[] = [];

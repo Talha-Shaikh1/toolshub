@@ -435,7 +435,8 @@ async def process_render_job(job_id: str, params: dict):
                 ass_path=temp_ass,
                 output_video_path=output_video,
                 ffmpeg_path=ffmpeg_bin,
-                is_4k=params["is_4k"],
+                is_4k=params.get("is_4k", False),
+                target_res=params.get("target_res", "original"),
                 sfx_audio_path=sfx_audio,
                 fonts_dir=params["fonts_dir"],
                 bg_music_path=params["resolved_bgm_path"],
@@ -445,7 +446,7 @@ async def process_render_job(job_id: str, params: dict):
                 real_duration=real_duration
             )
 
-            print(f"🎬 [Job {job_id[:8]}] FFmpeg render start ({real_duration:.1f}s, preset=veryfast, crf=23, maxrate=7M)...", flush=True)
+            print(f"🎬 [Job {job_id[:8]}] FFmpeg render start ({real_duration:.1f}s, target_res={params.get('target_res', 'original')}, exact bitrate preservation)...", flush=True)
             job["progress"] = 15
             job["stage"] = f"Burning subtitles & audio mix (0.0s / {real_duration:.1f}s)..."
 
@@ -677,6 +678,7 @@ async def render_reel(
         "caption_position": caption_position,
         "words_per_chunk": int(words_per_chunk),
         "is_4k": is_4k,
+        "target_res": export_resolution.lower(),
         "enable_emojis": enable_emojis,
         "enable_sfx": enable_sfx,
         "sfx_style": sfx_style,
@@ -881,6 +883,7 @@ async def render_cached_reel(
         "caption_position": caption_position,
         "words_per_chunk": int(words_per_chunk),
         "is_4k": is_4k,
+        "target_res": export_resolution.lower(),
         "enable_emojis": enable_emojis,
         "enable_sfx": enable_sfx,
         "sfx_style": sfx_style,

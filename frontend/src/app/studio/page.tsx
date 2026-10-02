@@ -931,7 +931,7 @@ export default function StudioPage() {
         cachedForm.append("words_per_chunk", wordsPerChunk.toString());
         cachedForm.append("caption_position", position);
         cachedForm.append("font_size", fontSize.toString());
-        cachedForm.append("export_resolution", exportRes);
+        cachedForm.append("export_resolution", exportResolution);
         cachedForm.append("enable_emojis", enableEmojis ? "true" : "false");
         cachedForm.append("font_choice", fontChoice);
         cachedForm.append("remove_silence", removeSilence ? "true" : "false");
@@ -990,7 +990,7 @@ export default function StudioPage() {
         formData.append("words_per_chunk", wordsPerChunk.toString());
         formData.append("caption_position", position);
         formData.append("font_size", fontSize.toString());
-        formData.append("export_resolution", exportRes);
+        formData.append("export_resolution", exportResolution);
         formData.append("enable_emojis", enableEmojis ? "true" : "false");
         formData.append("font_choice", fontChoice);
         formData.append("remove_silence", removeSilence ? "true" : "false");
