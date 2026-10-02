@@ -763,18 +763,7 @@ export default function StudioPage() {
       return;
     }
 
-    // TASK 2: Guard against >100MB upload
     const fileSizeMB = videoFile.size / (1024 * 1024);
-    if (fileSizeMB > 100) {
-      const warnMsg = "File is over 100MB. Please use Browser Render (⚡ Fast Export) or upload a smaller video.";
-      setErrorMessage(warnMsg);
-      toast.error("File Too Large for Cloud", {
-        id: "export-reel",
-        description: warnMsg,
-        duration: 8000
-      });
-      return;
-    }
 
     setIsRendering(true);
     setErrorMessage(null);
@@ -1044,34 +1033,35 @@ export default function StudioPage() {
             <span className="sm:hidden">.SRT</span>
           </button>
 
-          {/* 2. Fast Device Export (Zero-Upload Instant GPU Render) */}
+          {/* 1. Primary Action: Cloud Full HD Export (Unlimited Size, Visually Lossless CRF 18, Full Sync) */}
           <button
-            onClick={handleClientSideRender}
+            onClick={handleRenderVideo}
             disabled={isRendering || !videoFile}
-            className="h-8 px-3.5 rounded-md bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black font-extrabold text-xs flex items-center gap-1.5 shadow-sm active:scale-95 disabled:opacity-40 transition-all cursor-pointer"
-            title="Fast Device GPU Export: Renders entire full video without trimming directly on your device with 0MB upload"
+            className="h-8 px-4 rounded-md bg-gradient-to-r from-amber-500 via-amber-400 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black font-extrabold text-xs flex items-center gap-1.5 shadow-md shadow-amber-500/20 active:scale-95 disabled:opacity-40 transition-all cursor-pointer"
+            title="Cloud Full HD Export: Burns vector subtitles, SFX, and ducked audio mix directly into your video at original camera resolution"
           >
             {isRendering ? (
               <>
                 <RefreshCw className="h-3.5 w-3.5 animate-spin text-black" />
-                <span>Exporting ({renderProgress}%)...</span>
+                <span>{renderStep || `Exporting (${renderProgress}%)...`}</span>
               </>
             ) : (
               <>
-                <Zap className="h-3.5 w-3.5 text-black fill-current" />
-                <span>⚡ Fast Export (Full Video)</span>
+                <Download className="h-3.5 w-3.5 text-black" />
+                <span>🎬 Export Reel (Full HD)</span>
               </>
             )}
           </button>
 
-          {/* 3. Cloud Server Export (Optional Fallback) */}
+          {/* 2. Secondary: Device Local Render */}
           <button
-            onClick={handleRenderVideo}
+            onClick={handleClientSideRender}
             disabled={isRendering || !videoFile}
             className="h-8 px-2.5 rounded-md bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-white font-medium text-xs flex items-center gap-1 transition-all cursor-pointer hidden md:flex"
-            title="Cloud Server Export (FFmpeg Cloud Backend)"
+            title="Device Render: In-browser canvas render"
           >
-            <span>☁️ Cloud</span>
+            <Zap className="h-3 w-3 text-amber-400" />
+            <span>⚡ Device</span>
           </button>
         </div>
       </header>

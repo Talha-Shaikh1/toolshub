@@ -491,17 +491,8 @@ async def render_reel(
     file_size_mb = input_video_path.stat().st_size / (1024 * 1024) if input_video_path.exists() else 0
     print(f"📥 [Upload Received] File: {file.filename} ({file_size_mb:.2f} MB), Style: {style_name}", flush=True)
 
-    # TASK 2: Guard against >100MB files
-    if file_size_mb > 100.0:
-        if input_video_path.exists():
-            try:
-                input_video_path.unlink()
-            except Exception:
-                pass
-        raise HTTPException(
-            status_code=400,
-            detail="File size is over 100MB. Please use Browser Render (⚡ Fast Export) or upload a smaller video."
-        )
+    # Cloud accepts files of all sizes (100MB, 500MB, 1GB+)
+    print(f"✅ [File Accepted] Processing full video: {file.filename} ({file_size_mb:.2f} MB)", flush=True)
 
     custom_font_path = None
     if custom_font:

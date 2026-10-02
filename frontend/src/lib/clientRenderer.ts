@@ -49,6 +49,15 @@ export function renderCaptionedVideoClientSide(
     video.muted = false;
     video.playsInline = true;
     video.crossOrigin = "anonymous";
+    // Attach invisibly to DOM to prevent Chrome from throttling video frames
+    video.style.position = "fixed";
+    video.style.top = "-9999px";
+    video.style.left = "-9999px";
+    video.style.opacity = "0.01";
+    video.style.pointerEvents = "none";
+    video.style.width = "1px";
+    video.style.height = "1px";
+    document.body.appendChild(video);
 
     const playbackSpeed = 1.0; // Strictly 1.0x to preserve 100% natural duration, audio pitch & word sync
 
@@ -57,6 +66,9 @@ export function renderCaptionedVideoClientSide(
         video.pause();
         video.src = "";
         URL.revokeObjectURL(videoUrl);
+        if (video.parentNode) {
+          video.parentNode.removeChild(video);
+        }
       } catch {}
     };
 
