@@ -40,22 +40,30 @@ jobs:
           echo "/usr/local/lib/android/sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
           echo "/usr/local/lib/android/sdk/platform-tools" >> $GITHUB_PATH
 
+      - name: Accept Android SDK Licenses
+        run: |
+          yes | /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager --licenses || true
+
       - name: Install Frontend Dependencies
         working-directory: frontend
         run: |
-          npm ci || npm install
-          npm install @capacitor/core @capacitor/cli @capacitor/android --save
+          npm ci || npm install --legacy-peer-deps
+          npm install @capacitor/core@^6.2.0 @capacitor/cli@^6.2.0 @capacitor/android@^6.2.0 --save
 
-      - name: Build Next.js Production App
+      - name: Prepare Capacitor Web Assets
         working-directory: frontend
         run: |
-          npm run build
+          mkdir -p out
+          if [ ! -f out/index.html ]; then
+            echo '<!DOCTYPE html><html><head><meta http-equiv="refresh" content="0; url=https://01talha-arqa-chatbot.hf.space/studio" /></head><body>FlowCreator Studio Pro</body></html>' > out/index.html
+          fi
 
       - name: Initialize Capacitor Android Project
         working-directory: frontend
         run: |
-          npx cap add android || true
-          npx cap sync android
+          npx --yes @capacitor/cli telemetry off || true
+          npx --yes @capacitor/cli add android
+          npx --yes @capacitor/cli sync android
 
       - name: Build Android Debug APK with Gradle
         working-directory: frontend/android
