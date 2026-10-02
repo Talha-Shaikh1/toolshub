@@ -996,7 +996,7 @@ export default function StudioPage() {
             onClick={handleClientSideRender}
             disabled={isRendering || !videoFile}
             className="h-8 px-3.5 rounded-md bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black font-extrabold text-xs flex items-center gap-1.5 shadow-sm active:scale-95 disabled:opacity-40 transition-all cursor-pointer"
-            title="Fast Device Export: 0s upload, renders directly on your device with GPU in ~30s"
+            title="Fast Device GPU Export: Renders entire full video without trimming directly on your device with 0MB upload"
           >
             {isRendering ? (
               <>
@@ -1006,7 +1006,7 @@ export default function StudioPage() {
             ) : (
               <>
                 <Zap className="h-3.5 w-3.5 text-black fill-current" />
-                <span>⚡ Fast Export (~30s)</span>
+                <span>⚡ Fast Export (Full Video)</span>
               </>
             )}
           </button>
