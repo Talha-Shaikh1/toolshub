@@ -366,87 +366,7 @@ export default function StudioPage() {
       });
   }, [apiUrl]);
 
-  // Submagic Zero-Wait Background Upload (Uploads silently on Drop/Select)
-  const startBackgroundUpload = (file: File) => {
-    if (!file) return;
-    if (bgUploadXhrRef.current) {
-      try {
-        bgUploadXhrRef.current.abort();
-      } catch {}
-      bgUploadXhrRef.current = null;
-    }
-
-    setIsBgUploading(true);
-    isBgUploadingRef.current = true;
-    setBgUploadProgress(0);
-    setBgUploadDone(false);
-    setUploadedVideoId(null);
-    uploadedVideoIdRef.current = null;
-    setCloudShareUrl(null);
-
-    const formData = new FormData();
-    formData.append("file", file);
-
-    const uploadPromise = new Promise<string>((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
-      bgUploadXhrRef.current = xhr;
-      xhr.open("POST", `${apiUrl}/api/upload-raw`);
-      xhr.timeout = 600000; // 10 minutes
-
-      xhr.upload.onprogress = (e) => {
-        if (e.lengthComputable) {
-          const pct = Math.round((e.loaded / e.total) * 100);
-          setBgUploadProgress(pct);
-        }
-      };
-
-      xhr.onload = () => {
-        isBgUploadingRef.current = false;
-        setIsBgUploading(false);
-        if (xhr.status >= 200 && xhr.status < 300) {
-          try {
-            const res = JSON.parse(xhr.responseText);
-            if (res.video_id) {
-              setUploadedVideoId(res.video_id);
-              uploadedVideoIdRef.current = res.video_id;
-              setBgUploadDone(true);
-              toast.success("Cloud Upload 100% Complete ⚡", {
-                description: `Video cached (${res.size_mb || (file.size / (1024*1024)).toFixed(1)} MB). Ab AI captions auto-generate ho rahi hain...`
-              });
-              resolve(res.video_id);
-              // Auto-trigger caption generation now that upload is 100% complete!
-              if (handleTranscribeSpeechRef.current) {
-                handleTranscribeSpeechRef.current(file);
-              }
-              return;
-            }
-          } catch (parseErr) {
-            reject(parseErr);
-          }
-        }
-        reject(new Error(`Background upload ended with status ${xhr.status}`));
-      };
-
-      xhr.onerror = () => {
-        isBgUploadingRef.current = false;
-        setIsBgUploading(false);
-        reject(new Error("Network error during background upload."));
-      };
-
-      xhr.ontimeout = () => {
-        isBgUploadingRef.current = false;
-        setIsBgUploading(false);
-        reject(new Error("Background upload timed out."));
-      };
-
-      xhr.send(formData);
-    });
-
-    bgUploadPromiseRef.current = uploadPromise;
-    uploadPromise.catch(() => {});
-  };
-
-  // Unified File Processing (Used by Input File Picker & Drag-and-Drop)
+  // Local File Processing (0-Byte Cloud Upload: Video stays 100% on-device)
   const handleProcessFile = (file: File) => {
     if (!file) return;
     setVideoFile(file);
@@ -455,8 +375,20 @@ export default function StudioPage() {
     setCloudShareUrl(null);
     setErrorMessage(null);
     setWordsList([]);
-    // Immediately start silent Submagic background upload
-    startBackgroundUpload(file);
+    setIsBgUploading(false);
+    isBgUploadingRef.current = false;
+    setBgUploadDone(false);
+    
+    toast.success("Video Loaded Locally! ⚡", {
+      description: "0 MB Cloud Upload. On-device GPU ready for instant transcription & export."
+    });
+
+    // Auto-trigger caption generation directly without any cloud video upload
+    setTimeout(() => {
+      if (handleTranscribeSpeechRef.current) {
+        handleTranscribeSpeechRef.current(file);
+      }
+    }, 150);
   };
 
   // Video Selection
@@ -706,20 +638,6 @@ export default function StudioPage() {
     }
 
     const toastId = "transcribe-speech";
-
-    // User Rule: Jab tak cloud per poori upload na ho jaye, captions generate na hon!
-    if (isBgUploadingRef.current && bgUploadPromiseRef.current) {
-      toast.loading(`Cloud Uploading (${bgUploadProgress}%)...`, {
-        id: toastId,
-        description: "Video 100% upload hotay hi captions generate hongi taake export instant ho!"
-      });
-      try {
-        await bgUploadPromiseRef.current;
-      } catch (uploadWaitErr) {
-        console.warn("Background upload error during transcribe wait:", uploadWaitErr);
-      }
-    }
-
     setIsTranscribing(true);
     setErrorMessage(null);
 
@@ -924,291 +842,9 @@ export default function StudioPage() {
     }
   };
 
-  // Full Video Render (Submagic Zero-Wait Export + Task 1 Polling + 7-Day Cloud Storage)
+  // Full Video Render (100% Local Device GPU Render - 0 MB Cloud Upload)
   const handleRenderVideo = async () => {
-    if (!videoFile) {
-      setErrorMessage("Please upload a video file first");
-      return;
-    }
-
-    const fileSizeMB = videoFile.size / (1024 * 1024);
-
-    setIsRendering(true);
-    setErrorMessage(null);
-    setRenderProgress(0);
-    setRenderStep("Preparing render payload...");
-
-    const toastId = "export-reel";
-
-    try {
-      let activeApi = apiUrl;
-      let jobId: string | null = null;
-      let currentVideoId = uploadedVideoIdRef.current || uploadedVideoId;
-
-      // If silent background upload is still completing, await the promise so we NEVER upload 200MB again!
-      if (!currentVideoId && isBgUploadingRef.current && bgUploadPromiseRef.current) {
-        setRenderStep("Finalizing background upload (almost done)...");
-        toast.loading("Finalizing background upload...", {
-          id: toastId,
-          description: "Video is almost finished uploading. Waiting a few seconds for completion to avoid 200MB re-upload!"
-        });
-
-        try {
-          currentVideoId = await bgUploadPromiseRef.current;
-        } catch (waitErr) {
-          console.warn("Background upload await failed, falling back to direct upload:", waitErr);
-          currentVideoId = null;
-        }
-      }
-
-      // CASE 1: ZERO-WAIT FAST EXPORT (Uses pre-uploaded video_id, payload is only ~10KB!)
-      if (currentVideoId) {
-        setRenderProgress(20);
-        setRenderStep("0s Upload! Submitting lightweight render manifest (10KB)...");
-        toast.loading("⚡ Zero-Wait Fast Export Starting...", {
-          id: toastId,
-          description: `Skipped ${fileSizeMB.toFixed(1)} MB upload! Rendering immediately on cloud server.`
-        });
-
-        const cachedForm = new FormData();
-        cachedForm.append("video_id", currentVideoId);
-        cachedForm.append("style_name", styleName);
-        cachedForm.append("words_per_chunk", wordsPerChunk.toString());
-        cachedForm.append("caption_position", position);
-        cachedForm.append("font_size", fontSize.toString());
-        cachedForm.append("export_resolution", exportResolution);
-        cachedForm.append("enable_emojis", enableEmojis ? "true" : "false");
-        cachedForm.append("font_choice", fontChoice);
-        cachedForm.append("remove_silence", removeSilence ? "true" : "false");
-        cachedForm.append("enable_sfx", enableSfx ? "true" : "false");
-        cachedForm.append("sfx_style", sfxStyle);
-        cachedForm.append("sfx_volume", sfxVolume.toString());
-        if (customFontFile) cachedForm.append("custom_font", customFontFile);
-        if (selectedBgmUrl) {
-          cachedForm.append("bg_music_url", selectedBgmUrl);
-          cachedForm.append("bg_music_volume", bgmVolume.toString());
-          cachedForm.append("enable_auto_ducking", enableAutoDucking ? "true" : "false");
-          cachedForm.append("bg_music_start_offset", bgmStartOffset.toString());
-        } else if (selectedBgmId && selectedBgmId !== "none" && selectedBgmId !== "custom") {
-          cachedForm.append("bg_music_id", selectedBgmId);
-          cachedForm.append("bg_music_volume", bgmVolume.toString());
-          cachedForm.append("enable_auto_ducking", enableAutoDucking ? "true" : "false");
-          cachedForm.append("bg_music_start_offset", bgmStartOffset.toString());
-        }
-        if (customBgmFile) {
-          cachedForm.append("custom_bg_music", customBgmFile);
-          cachedForm.append("bg_music_volume", bgmVolume.toString());
-          cachedForm.append("enable_auto_ducking", enableAutoDucking ? "true" : "false");
-          cachedForm.append("bg_music_start_offset", bgmStartOffset.toString());
-        }
-        if (groqKey) cachedForm.append("groq_api_key", groqKey);
-        if (wordsList && wordsList.length > 0) {
-          cachedForm.append("words_json", JSON.stringify(wordsList));
-        } else if (editableTranscript && editableTranscript.trim()) {
-          cachedForm.append("words_json", editableTranscript);
-        }
-
-        const res = await fetch(`${activeApi}/api/render-cached`, {
-          method: "POST",
-          body: cachedForm
-        });
-
-        if (!res.ok) {
-          const errData = await res.json().catch(() => ({}));
-          throw new Error(errData.detail || `Zero-wait export failed with status ${res.status}`);
-        }
-
-        const data = await res.json();
-        jobId = data.job_id;
-
-      } else {
-        // CASE 2: FALLBACK TO STANDARD VIDEO UPLOAD (If background upload was cancelled or failed)
-        setRenderStep("Uploading video to cloud...");
-        toast.loading("Uploading video to cloud (0%)...", {
-          id: toastId,
-          description: `Starting transfer of ${fileSizeMB.toFixed(1)} MB...`
-        });
-
-        const formData = new FormData();
-        formData.append("file", videoFile);
-        formData.append("style_name", styleName);
-        formData.append("words_per_chunk", wordsPerChunk.toString());
-        formData.append("caption_position", position);
-        formData.append("font_size", fontSize.toString());
-        formData.append("export_resolution", exportResolution);
-        formData.append("enable_emojis", enableEmojis ? "true" : "false");
-        formData.append("font_choice", fontChoice);
-        formData.append("remove_silence", removeSilence ? "true" : "false");
-        formData.append("enable_sfx", enableSfx ? "true" : "false");
-        formData.append("sfx_style", sfxStyle);
-        if (customFontFile) formData.append("custom_font", customFontFile);
-        if (selectedBgmUrl) {
-          formData.append("bg_music_url", selectedBgmUrl);
-          formData.append("bg_music_volume", bgmVolume.toString());
-          formData.append("enable_auto_ducking", enableAutoDucking ? "true" : "false");
-          formData.append("bg_music_start_offset", bgmStartOffset.toString());
-        } else if (selectedBgmId && selectedBgmId !== "none" && selectedBgmId !== "custom") {
-          formData.append("bg_music_id", selectedBgmId);
-          formData.append("bg_music_volume", bgmVolume.toString());
-          formData.append("enable_auto_ducking", enableAutoDucking ? "true" : "false");
-          formData.append("bg_music_start_offset", bgmStartOffset.toString());
-        }
-        if (customBgmFile) {
-          formData.append("custom_bg_music", customBgmFile);
-          formData.append("bg_music_volume", bgmVolume.toString());
-          formData.append("enable_auto_ducking", enableAutoDucking ? "true" : "false");
-          formData.append("bg_music_start_offset", bgmStartOffset.toString());
-        }
-        if (groqKey) formData.append("groq_api_key", groqKey);
-        if (wordsList && wordsList.length > 0) {
-          formData.append("words_json", JSON.stringify(wordsList));
-        } else if (editableTranscript && editableTranscript.trim()) {
-          formData.append("words_json", editableTranscript);
-        }
-
-        const uploadResult: any = await new Promise((resolve, reject) => {
-          const xhr = new XMLHttpRequest();
-          xhr.open("POST", `${activeApi}/api/render`);
-          xhr.timeout = 600000;
-
-          xhr.upload.onprogress = (e) => {
-            if (e.lengthComputable) {
-              const uploadPct = Math.round((e.loaded / e.total) * 100);
-              if (uploadPct >= 100) {
-                setRenderProgress(25);
-                setRenderStep("Video transferred! Server is writing to disk & starting FFmpeg queue...");
-              } else {
-                setRenderProgress(Math.min(24, Math.round(uploadPct * 0.25)));
-                setRenderStep(`Uploading to cloud: ${uploadPct}% (${((e.loaded) / (1024 * 1024)).toFixed(1)}MB / ${((e.total) / (1024 * 1024)).toFixed(1)}MB)`);
-                toast.loading(`Uploading to cloud (${uploadPct}%)...`, {
-                  id: toastId,
-                  description: `Uploaded ${((e.loaded) / (1024 * 1024)).toFixed(1)}MB of ${((e.total) / (1024 * 1024)).toFixed(1)}MB`
-                });
-              }
-            }
-          };
-
-          xhr.onload = () => {
-            if (xhr.status >= 200 && xhr.status < 300) {
-              try {
-                resolve(JSON.parse(xhr.responseText));
-              } catch {
-                resolve({ raw: xhr.responseText });
-              }
-            } else {
-              let errorText = xhr.responseText;
-              try {
-                const parsed = JSON.parse(xhr.responseText);
-                if (parsed.detail) errorText = parsed.detail;
-              } catch {
-                if (xhr.status === 500 || xhr.status === 503 || errorText.includes("<!DOCTYPE") || errorText.includes("<html")) {
-                  errorText = `Cloud server was updating (HTTP ${xhr.status}). Server is now online. Please click Export Reel again.`;
-                }
-              }
-              reject(new Error(errorText || `Upload failed with HTTP ${xhr.status}`));
-            }
-          };
-
-          xhr.onerror = () => reject(new Error("Network error during video upload."));
-          xhr.send(formData);
-        });
-
-        jobId = uploadResult.job_id;
-      }
-
-      if (!jobId) {
-        throw new Error("No job ID received from render queue.");
-      }
-
-      // STAGE 2: Queued -> Rendering -> Ready (Poll every 2 seconds)
-      setRenderProgress(25);
-      setRenderStep("Job queued in render queue...");
-      toast.loading("Queued in render queue...", {
-        id: toastId,
-        description: "Waiting for worker allocation..."
-      });
-
-      let isFinished = false;
-
-      while (!isFinished) {
-        await new Promise((r) => setTimeout(r, 2000));
-
-        const pollRes = await fetch(`${activeApi}/api/render/${jobId}`);
-        if (!pollRes.ok) {
-          throw new Error(`Failed to query job status (HTTP ${pollRes.status})`);
-        }
-
-        const jobStatus = await pollRes.json();
-
-        if (jobStatus.status === "failed") {
-          throw new Error(jobStatus.error || "Cloud rendering failed on server.");
-        }
-
-        if (jobStatus.status === "done") {
-          isFinished = true;
-          setRenderProgress(100);
-          setRenderStep("Render complete! Downloading...");
-
-          const downloadUrl = `${activeApi}/api/render/${jobId}/download`;
-          setExportedVideoUrl(downloadUrl);
-
-          // Task 3: 7-Day Cloud Storage Shareable Link
-          let shareUrl = jobStatus.cloud_url;
-          if (!shareUrl) {
-            shareUrl = downloadUrl;
-          } else if (!shareUrl.startsWith("http")) {
-            shareUrl = `${activeApi}${shareUrl.startsWith("/") ? "" : "/"}${shareUrl}`;
-          }
-          setCloudShareUrl(shareUrl);
-
-          // Auto-trigger browser download
-          try {
-            const a = document.createElement("a");
-            a.href = downloadUrl;
-            a.download = `${videoFile.name.replace(/\.[^/.]+$/, "")}_captioned.mp4`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-          } catch (dlErr) {
-            console.warn("Auto-download trigger failed:", dlErr);
-          }
-
-          toast.success("Viral Reel Rendered & Downloaded! 🎉", {
-            id: toastId,
-            description: "Server render complete with visually lossless 60FPS subtitles & ducked audio."
-          });
-          break;
-        }
-
-        // In progress (Queued or Rendering)
-        const currentProgress = Math.max(25, jobStatus.progress || 25);
-        setRenderProgress(currentProgress);
-        const stageLabel = jobStatus.stage || (jobStatus.status === "queued" ? "Queued in render queue..." : "Burning subtitles & audio...");
-        setRenderStep(stageLabel);
-
-        toast.loading(`Cloud Rendering (${currentProgress}%)...`, {
-          id: toastId,
-          description: stageLabel
-        });
-      }
-
-    } catch (err: any) {
-      const rawMsg = err.message || "";
-      let friendlyMsg = rawMsg;
-      if (rawMsg.includes("<!DOCTYPE") || rawMsg.includes("<html") || rawMsg.includes("500") || rawMsg.includes("503")) {
-        friendlyMsg = "Cloud server was restarting with latest update. Server is now online. Please click Export Reel again.";
-      } else if (rawMsg.includes("Failed to fetch") || rawMsg.includes("NetworkError") || rawMsg.includes("Load failed")) {
-        friendlyMsg = "Cannot connect to backend server. Hugging Face Space may be waking up. Please retry in ~30s.";
-      }
-      setErrorMessage(friendlyMsg);
-      toast.error("Rendering Failed", {
-        id: toastId,
-        description: friendlyMsg,
-        duration: 8000
-      });
-    } finally {
-      setIsRendering(false);
-    }
+    await handleClientSideRender();
   };
 
   const activeStyle = STYLE_PRESETS[styleName] || STYLE_PRESETS["Hormozi Boxed 2.0 (Solid Box Behind Word)"];
@@ -1273,19 +909,14 @@ export default function StudioPage() {
           {/* 1. Generate / Re-generate Captions */}
           <button
             onClick={() => handleTranscribeSpeech()}
-            disabled={isTranscribing || !videoFile || isBgUploading}
+            disabled={isTranscribing || !videoFile}
             className="h-8 px-2 sm:px-3 rounded-md bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/50 text-amber-300 font-bold text-xs flex items-center gap-1.5 shadow-sm active:scale-95 disabled:opacity-40 transition-all cursor-pointer"
             title="Auto-transcribe speech to word-level animated captions"
           >
-            {isBgUploading ? (
+            {isTranscribing ? (
               <>
                 <RefreshCw className="h-3 w-3 animate-spin text-amber-400" />
-                <span className="hidden sm:inline">Uploading ({bgUploadProgress}%)...</span>
-              </>
-            ) : isTranscribing ? (
-              <>
-                <RefreshCw className="h-3 w-3 animate-spin text-amber-400" />
-                <span className="hidden sm:inline">Transcribing...</span>
+                <span className="hidden sm:inline">Transcribing (~1s)...</span>
               </>
             ) : (
               <>
@@ -1319,17 +950,11 @@ export default function StudioPage() {
           {/* Primary Action: Direct Zero-Wait High Bitrate Export */}
           <button
             onClick={handleRenderVideo}
-            disabled={isRendering || !videoFile || isBgUploading}
+            disabled={isRendering || !videoFile}
             className="h-8 px-2.5 sm:px-4 rounded-md bg-gradient-to-r from-amber-500 via-amber-400 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black font-extrabold text-xs flex items-center gap-1.5 shadow-md shadow-amber-500/20 active:scale-95 disabled:opacity-40 transition-all cursor-pointer"
-            title="Export Reel: 100% Original Camera Bitrate (193MB+ Guaranteed) & Exact Duration"
+            title="100% Local Device GPU Render (0 MB Cloud Upload)"
           >
-            {isBgUploading ? (
-              <>
-                <RefreshCw className="h-3.5 w-3.5 animate-spin text-black" />
-                <span className="hidden sm:inline">Uploading ({bgUploadProgress}%)...</span>
-                <span className="sm:hidden text-[11px]">{bgUploadProgress}%</span>
-              </>
-            ) : isRendering ? (
+            {isRendering ? (
               <>
                 <RefreshCw className="h-3.5 w-3.5 animate-spin text-black" />
                 <span>{renderStep ? `${renderProgress}%` : `Exporting...`}</span>
@@ -1337,7 +962,7 @@ export default function StudioPage() {
             ) : (
               <>
                 <Download className="h-3.5 w-3.5 text-black" />
-                <span className="hidden sm:inline">🎬 Export Reel ({exportResolution.toUpperCase()})</span>
+                <span className="hidden sm:inline">⚡ Export Reel ({exportResolution.toUpperCase()})</span>
                 <span className="sm:hidden text-[11px]">Export</span>
               </>
             )}
@@ -1431,81 +1056,48 @@ export default function StudioPage() {
                 </span>
               </label>
 
-              {/* Submagic Background Upload Status */}
+              {/* On-Device GPU Engine Status */}
               {videoFile && (
                 <div className="mt-1 flex items-center justify-between px-1 text-[10px]">
-                  {isBgUploading ? (
-                    <span className="flex items-center gap-1 text-amber-400 font-medium">
-                      <RefreshCw className="h-3 w-3 animate-spin text-amber-400" />
-                      <span>Silent Cloud Sync: {bgUploadProgress}%</span>
-                    </span>
-                  ) : bgUploadDone ? (
-                    <span className="flex items-center gap-1 text-emerald-400 font-semibold">
-                      <Check className="h-3 w-3 text-emerald-400" />
-                      <span>Cloud Synced (0s Export Ready)</span>
-                    </span>
-                  ) : (
-                    <span className="text-slate-500">Ready for editing</span>
-                  )}
-                  <span className="text-slate-500">{(videoFile.size / (1024 * 1024)).toFixed(1)} MB</span>
+                  <span className="flex items-center gap-1 text-emerald-400 font-semibold">
+                    <Check className="h-3 w-3 text-emerald-400" />
+                    <span>Local GPU Engine Ready (0 MB Cloud)</span>
+                  </span>
+                  <span className="text-slate-400 font-mono">{(videoFile.size / (1024 * 1024)).toFixed(1)} MB</span>
                 </div>
               )}
-
 
               {/* Primary Caption Generation Action */}
               {videoFile && (
                 <div className="mt-2 space-y-1.5">
-                  {isBgUploading ? (
-                    <div className="w-full p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs space-y-2">
-                      <div className="flex items-center justify-between font-bold">
-                        <span className="flex items-center gap-1.5">
-                          <RefreshCw className="h-3.5 w-3.5 animate-spin text-amber-400" />
-                          <span>Uploading to Cloud ({bgUploadProgress}%)</span>
-                        </span>
-                        <span className="text-[10px] font-mono text-slate-400">
-                          {(videoFile.size / (1024 * 1024)).toFixed(1)} MB
-                        </span>
-                      </div>
-                      <div className="w-full bg-slate-900 rounded-full h-2 overflow-hidden border border-slate-800">
-                        <div
-                          className="bg-gradient-to-r from-amber-500 to-orange-500 h-full transition-all duration-300 rounded-full"
-                          style={{ width: `${bgUploadProgress}%` }}
-                        />
-                      </div>
-                      <p className="text-[10px] text-slate-300 text-center font-medium leading-relaxed">
-                        ⏳ 100% upload hotay hi captions auto-generate hongi taake export instant 0s ho!
-                      </p>
-                    </div>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => handleTranscribeSpeech()}
-                      disabled={isTranscribing}
-                      className="w-full py-2.5 px-3 rounded-lg bg-gradient-to-r from-amber-500 via-amber-400 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black font-extrabold text-xs flex items-center justify-center gap-2 shadow-lg shadow-amber-500/25 active:scale-95 transition-all cursor-pointer disabled:opacity-50"
-                    >
-                      {isTranscribing ? (
-                        <>
-                          <RefreshCw className="h-4 w-4 animate-spin text-black" />
-                          <span>Transcribing Speech (~1s)...</span>
-                        </>
-                      ) : (
-                        <>
-                          <Wand2 className="h-4 w-4 text-black" />
-                          <span>{wordsList.length > 0 ? "✨ Re-Generate AI Captions" : "✨ Generate AI Captions (1-Click)"}</span>
-                        </>
-                      )}
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => handleTranscribeSpeech()}
+                    disabled={isTranscribing}
+                    className="w-full py-2.5 px-3 rounded-lg bg-gradient-to-r from-amber-500 via-amber-400 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black font-extrabold text-xs flex items-center justify-center gap-2 shadow-lg shadow-amber-500/25 active:scale-95 transition-all cursor-pointer disabled:opacity-50"
+                  >
+                    {isTranscribing ? (
+                      <>
+                        <RefreshCw className="h-4 w-4 animate-spin text-black" />
+                        <span>Transcribing Speech (~1s)...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Wand2 className="h-4 w-4 text-black" />
+                        <span>{wordsList.length > 0 ? "✨ Re-Generate AI Captions" : "✨ Generate AI Captions (1-Click)"}</span>
+                      </>
+                    )}
+                  </button>
                   {wordsList.length > 0 ? (
                     <div className="flex items-center justify-between text-[10px] text-emerald-400 px-1 pt-0.5">
                       <span className="flex items-center gap-1 font-semibold">
                         <Check className="h-3 w-3" /> {wordsList.length} words synced
                       </span>
-                      <span className="text-slate-400 font-mono">Groq LPU Active</span>
+                      <span className="text-slate-400 font-mono">Whisper AI Ready</span>
                     </div>
-                  ) : !isBgUploading && (
+                  ) : (
                     <p className="text-[9px] text-slate-400 text-center pt-0.5">
-                      Extracts word-by-word timestamps in ~1s
+                      Extracts word-by-word timestamps in ~1s (0 MB video upload)
                     </p>
                   )}
                 </div>
@@ -2704,9 +2296,9 @@ export default function StudioPage() {
             <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800 flex items-center justify-between text-[11px] text-slate-400">
               <span className="flex items-center gap-1.5">
                 <span className="h-2 w-2 rounded-full bg-emerald-400" />
-                <span>Submagic Zero-Wait Upload Active (0s wait time)</span>
+                <span>100% On-Device GPU Render (0 MB Cloud Upload)</span>
               </span>
-              <span className="text-slate-500 font-mono">Cloudflare R2 Link Included</span>
+              <span className="text-emerald-400 font-mono font-semibold">Hardware Accelerated</span>
             </div>
 
           </div>
