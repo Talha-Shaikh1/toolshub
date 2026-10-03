@@ -1,0 +1,47 @@
+name: Publish Windows Desktop Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/**'
+      - '.github/workflows/release-desktop.yml'
+  workflow_dispatch:
+
+jobs:
+  build-and-release:
+    name: Build & Publish Windows Suite
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Compile Desktop App & Setup Installer
+        run: |
+          & "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /target:winexe /win32icon:assets\app_icon.ico /out:FlowCreator-Studio.exe tools\Launcher.cs
+          & "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /target:winexe /win32icon:assets\app_icon.ico /reference:Microsoft.CSharp.dll /out:FlowCreator-Studio-Setup.exe tools\SetupInstaller.cs
+          Compress-Archive -Path FlowCreator-Studio-Setup.exe, FlowCreator-Studio.exe, Launch-Desktop-App.bat, Create-Desktop-Shortcut.ps1, assets\app_icon.ico -DestinationPath FlowCreator-Studio-Windows.zip -Force
+
+      - name: Publish Windows Desktop Release
+        uses: softprops/action-gh-release@v2
+        if: github.ref == 'refs/heads/main'
+        with:
+          tag_name: v1.0.0-desktop
+          name: "FlowCreator Studio Pro - Windows Desktop Suite (v1.0.0)"
+          body: |
+            ## 💻 FlowCreator Studio Pro for Windows
+            Hardware GPU Accelerated AI Video Creator with Zero Cloud Upload.
+            
+            ### 📥 Downloads:
+            - **`FlowCreator-Studio-Setup.exe`**: 1-Click Store-Style Setup Wizard (Installs to Start Menu & Desktop).
+            - **`FlowCreator-Studio.exe`**: Standalone Portable Executable (No installation required).
+            - **`FlowCreator-Studio-Windows.zip`**: Complete Portable Package with Batch Launchers and Icon.
+          files: |
+            FlowCreator-Studio-Setup.exe
+            FlowCreator-Studio.exe
+            FlowCreator-Studio-Windows.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

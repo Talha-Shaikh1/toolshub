@@ -16,8 +16,7 @@ ENV/
 env/
 build/
 develop-eggs/
-# downloads/
-!**/downloads/**
+backend/static_ui/downloads/
 .eggs/
 /lib/
 /lib64/

@@ -12,7 +12,7 @@ from typing import Optional, List, Dict, Any
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -171,10 +171,37 @@ if not STATIC_UI_DIR.exists():
 if STATIC_UI_DIR.exists():
     if (STATIC_UI_DIR / "_next").exists():
         app.mount("/_next", StaticFiles(directory=str(STATIC_UI_DIR / "_next")), name="next_assets")
-    if (STATIC_UI_DIR / "downloads").exists():
-        app.mount("/downloads", StaticFiles(directory=str(STATIC_UI_DIR / "downloads")), name="downloads")
     if (STATIC_UI_DIR / "audio").exists():
         app.mount("/audio", StaticFiles(directory=str(STATIC_UI_DIR / "audio")), name="audio")
+
+# Direct Download Endpoints (Zero-wait CDN downloads from official GitHub Releases)
+@app.get("/downloads/FlowCreator-Studio-Setup.exe")
+def download_setup():
+    local_file = STATIC_UI_DIR / "downloads" / "FlowCreator-Studio-Setup.exe"
+    if local_file.exists():
+        return FileResponse(str(local_file), filename="FlowCreator-Studio-Setup.exe")
+    return RedirectResponse("https://github.com/Talha-Shaikh1/toolshub/releases/download/v1.0.0-desktop/FlowCreator-Studio-Setup.exe")
+
+@app.get("/downloads/FlowCreator-Studio.exe")
+def download_exe():
+    local_file = STATIC_UI_DIR / "downloads" / "FlowCreator-Studio.exe"
+    if local_file.exists():
+        return FileResponse(str(local_file), filename="FlowCreator-Studio.exe")
+    return RedirectResponse("https://github.com/Talha-Shaikh1/toolshub/releases/download/v1.0.0-desktop/FlowCreator-Studio.exe")
+
+@app.get("/downloads/FlowCreator-Studio-Windows.zip")
+def download_zip():
+    local_file = STATIC_UI_DIR / "downloads" / "FlowCreator-Studio-Windows.zip"
+    if local_file.exists():
+        return FileResponse(str(local_file), filename="FlowCreator-Studio-Windows.zip")
+    return RedirectResponse("https://github.com/Talha-Shaikh1/toolshub/releases/download/v1.0.0-desktop/FlowCreator-Studio-Windows.zip")
+
+@app.get("/downloads/FlowCreator-Studio.apk")
+def download_apk():
+    local_file = STATIC_UI_DIR / "downloads" / "FlowCreator-Studio.apk"
+    if local_file.exists():
+        return FileResponse(str(local_file), filename="FlowCreator-Studio.apk")
+    return RedirectResponse("https://github.com/Talha-Shaikh1/toolshub/releases/download/v1.0.0-apk/FlowCreator-Studio.apk")
 
 # Mount outputs for static file retrieval
 app.mount("/outputs", StaticFiles(directory=str(OUTPUTS_DIR)), name="outputs")
