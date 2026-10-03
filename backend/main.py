@@ -10,6 +10,19 @@ import time
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
+if sys.platform.startswith("win"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+CURRENT_DIR = Path(__file__).resolve().parent
+if str(CURRENT_DIR) not in sys.path:
+    sys.path.insert(0, str(CURRENT_DIR))
+if str(CURRENT_DIR.parent) not in sys.path:
+    sys.path.insert(0, str(CURRENT_DIR.parent))
+
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
@@ -1012,10 +1025,12 @@ async def download_render_job(job_id: str):
     out_path = Path(job["output_video_path"])
     if not out_path.exists():
         raise HTTPException(status_code=404, detail="Rendered video file not found on disk")
+    orig_name = Path(job.get("filename", "reel.mp4")).stem
+    clean_stem = re.sub(r'[^a-zA-Z0-9_-]', '_', orig_name).strip("_") or "viral_reel"
     return FileResponse(
         str(out_path),
         media_type="video/mp4",
-        filename=f"viral_reel_{job_id[:8]}.mp4"
+        filename=f"{clean_stem}_captioned.mp4"
     )
 
 

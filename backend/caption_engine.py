@@ -10,6 +10,13 @@ from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional
 from PIL import Image, ImageFilter, ImageEnhance, ImageDraw, ImageFont
 
+if sys.platform.startswith("win"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 STYLE_PRESETS = {
     "Hormozi Boxed 2.0 (Solid Box Behind Word)": {
         "primary_color": "&H00FFFFFF&",
@@ -986,9 +993,9 @@ def build_render_ffmpeg_cmd(
 
     # 1. RESOLUTION SCALING & ZERO-RESCALE PASSTHROUGH
     if is_4k or target_res == "4k":
-        filter_str = f"scale=2160:3840:flags=lanczos,unsharp=5:5:0.8:5:5:0.0,{sub_filter}"
+        filter_str = f"scale='if(gte(a,1),-2,2160)':'if(gte(a,1),2160,-2)':flags=lanczos,unsharp=5:5:0.8:5:5:0.0,{sub_filter}"
     elif target_res == "2k":
-        filter_str = f"scale=1440:2560:flags=lanczos,unsharp=3:3:0.6:3:3:0.0,{sub_filter}"
+        filter_str = f"scale='if(gte(a,1),-2,1440)':'if(gte(a,1),1440,-2)':flags=lanczos,unsharp=3:3:0.6:3:3:0.0,{sub_filter}"
     else:
         # Original video pixels are 100% untouched! Only vector subtitles are burned
         filter_str = sub_filter
@@ -1068,15 +1075,23 @@ def build_render_ffmpeg_cmd(
     has_audio_filter = (bgm_idx is not None or sfx_idx is not None)
     best_encoder, encoder_opts = detect_best_video_encoder(ffmpeg_path=ffmpeg_path)
 
-    v_encode_args = [
-        "-c:v", best_encoder,
-        *encoder_opts,
-        "-b:v", target_bitrate_str,
-        "-minrate", minrate_str,
-        "-maxrate", maxrate_str,
-        "-bufsize", bufsize_str,
-        "-pix_fmt", "yuv420p"
-    ]
+    if best_encoder == "libx264":
+        v_encode_args = [
+            "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-crf", "18",
+            "-pix_fmt", "yuv420p"
+        ]
+    else:
+        v_encode_args = [
+            "-c:v", best_encoder,
+            *encoder_opts,
+            "-b:v", target_bitrate_str,
+            "-minrate", minrate_str,
+            "-maxrate", maxrate_str,
+            "-bufsize", bufsize_str,
+            "-pix_fmt", "yuv420p"
+        ]
 
     if has_audio_filter:
         cmd = [
@@ -1101,7 +1116,8 @@ def build_render_ffmpeg_cmd(
             "-i", video_path,
             "-vf", filter_str,
             *v_encode_args,
-            "-c:a", "copy",
+            "-c:a", "aac",
+            "-b:a", "320k",
             "-movflags", "+faststart",
             output_video_path
         ]

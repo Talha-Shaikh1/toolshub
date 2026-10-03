@@ -8,7 +8,6 @@ import {
   transcribeWithGroqDirect,
   formatWordsToEditableText
 } from "@/lib/audioExtractor";
-import { renderCaptionedVideoClientSide } from "@/lib/clientRenderer";
 import {
   Video,
   Sparkles,
@@ -234,14 +233,27 @@ function getFontFamilyCss(fontChoice: string, customFontFamily?: string | null):
 }
 
 const LIVE_HF_BACKEND_URL = "https://01talha-arqa-chatbot.hf.space";
-const DEFAULT_API_URL = (process.env.NEXT_PUBLIC_API_URL && !process.env.NEXT_PUBLIC_API_URL.includes("localhost"))
-  ? process.env.NEXT_PUBLIC_API_URL
-  : LIVE_HF_BACKEND_URL;
+
+export function getActiveApiUrl(customUrl?: string): string {
+  if (customUrl && customUrl.trim() && !customUrl.includes("undefined")) {
+    return customUrl.trim();
+  }
+  if (typeof window !== "undefined") {
+    const host = window.location.hostname;
+    if (host === "localhost" || host === "127.0.0.1") {
+      return window.location.port === "8000" ? window.location.origin : "http://localhost:8000";
+    }
+    if (window.location.origin.includes("hf.space")) {
+      return window.location.origin;
+    }
+  }
+  return process.env.NEXT_PUBLIC_API_URL || LIVE_HF_BACKEND_URL;
+}
 
 export default function StudioPage() {
   const [leftNav, setLeftNav] = useState<"style" | "font" | "magic" | "audio" | "script">("style");
   const [mobileTab, setMobileTab] = useState<"canvas" | "controls">("canvas");
-  const [apiUrl, setApiUrl] = useState<string>(DEFAULT_API_URL);
+  const [apiUrl, setApiUrl] = useState<string>(LIVE_HF_BACKEND_URL);
   const [apiOnline, setApiOnline] = useState<boolean | null>(null);
 
   // Reel Caption States (Default 70px font size = realistic 1080p subtitle scale)
@@ -366,7 +378,76 @@ export default function StudioPage() {
       });
   }, [apiUrl]);
 
-  // Local File Processing (0-Byte Cloud Upload: Video stays 100% on-device)
+  // Silent Background Video Cache (Allows 0s instant export when user is ready)
+  const startSilentBackgroundUpload = (file: File) => {
+    if (bgUploadXhrRef.current) {
+      bgUploadXhrRef.current.abort();
+      bgUploadXhrRef.current = null;
+    }
+
+    setIsBgUploading(true);
+    isBgUploadingRef.current = true;
+    setBgUploadProgress(0);
+    setBgUploadDone(false);
+    setUploadedVideoId(null);
+    uploadedVideoIdRef.current = null;
+
+    const activeApi = getActiveApiUrl(apiUrl);
+
+    bgUploadPromiseRef.current = new Promise<string>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      bgUploadXhrRef.current = xhr;
+
+      const fd = new FormData();
+      fd.append("file", file);
+
+      xhr.open("POST", `${activeApi}/api/upload-raw`);
+      xhr.timeout = 600000;
+
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          const pct = Math.round((e.loaded / e.total) * 100);
+          setBgUploadProgress(pct);
+        }
+      };
+
+      xhr.onload = () => {
+        setIsBgUploading(false);
+        isBgUploadingRef.current = false;
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const data = JSON.parse(xhr.responseText);
+            const vId = data.video_id;
+            setUploadedVideoId(vId);
+            uploadedVideoIdRef.current = vId;
+            setBgUploadDone(true);
+            setBgUploadProgress(100);
+            resolve(vId);
+          } catch (e: any) {
+            reject(e);
+          }
+        } else {
+          reject(new Error(`Upload failed with status ${xhr.status}`));
+        }
+      };
+
+      xhr.onerror = () => {
+        setIsBgUploading(false);
+        isBgUploadingRef.current = false;
+        reject(new Error("Network error during background cache"));
+      };
+
+      xhr.ontimeout = () => {
+        setIsBgUploading(false);
+        isBgUploadingRef.current = false;
+        reject(new Error("Background cache timed out"));
+      };
+
+      xhr.send(fd);
+    });
+  };
+
+  // Local File Processing
   const handleProcessFile = (file: File) => {
     if (!file) return;
     setVideoFile(file);
@@ -375,15 +456,16 @@ export default function StudioPage() {
     setCloudShareUrl(null);
     setErrorMessage(null);
     setWordsList([]);
-    setIsBgUploading(false);
-    isBgUploadingRef.current = false;
     setBgUploadDone(false);
-    
-    toast.success("Video Loaded Locally! ⚡", {
-      description: "0 MB Cloud Upload. On-device GPU ready for instant transcription & export."
+
+    toast.success("Video Loaded! ⚡", {
+      description: "Speech transcription started. High-quality render engine ready."
     });
 
-    // Auto-trigger caption generation directly without any cloud video upload
+    // Start silent background video cache so export takes 0s upload wait time
+    startSilentBackgroundUpload(file);
+
+    // Auto-trigger caption generation directly with lightweight extracted audio
     setTimeout(() => {
       if (handleTranscribeSpeechRef.current) {
         handleTranscribeSpeechRef.current(file);
@@ -758,14 +840,14 @@ export default function StudioPage() {
     handleTranscribeSpeechRef.current = handleTranscribeSpeech;
   });
 
-  // 1. FAST CLIENT-SIDE EXPORT (Zero-Upload Instant GPU Render)
-  const handleClientSideRender = async (targetResOverride?: "original" | "1080p" | "2k" | "4k") => {
+  // Native Industry-Standard Render Pipeline (Hard-Burned Captions via High-Performance FFmpeg)
+  const handleRenderVideo = async (targetResOverride?: "original" | "1080p" | "2k" | "4k") => {
     if (!videoFile) {
       toast.error("No Video Found", { description: "Please upload or drop a video file first." });
       return;
     }
     if (!wordsList || wordsList.length === 0) {
-      toast.error("No Captions Found", { description: "Please click 'Generate AI Captions' first." });
+      toast.error("No Captions Found", { description: "Please generate AI captions first." });
       return;
     }
 
@@ -775,76 +857,266 @@ export default function StudioPage() {
     setRenderProgress(5);
     const targetRes = targetResOverride || exportResolution;
     const resLabel = targetRes === "2k" ? "2K Quad HD" : targetRes === "4k" ? "4K Ultra HD" : "1080p Full HD";
-    setRenderStep(`Initializing device GPU canvas (${resLabel})...`);
+    setRenderStep(`Preparing high-quality render (${resLabel})...`);
+
     const toastId = "export-reel";
-    toast.loading(`⚡ Fast Device Export Starting (${resLabel})...`, {
+    toast.loading(`🎬 Exporting Reel (${resLabel})...`, {
       id: toastId,
-      description: "0s upload • Rendering directly on your device GPU."
+      description: "Hardware accelerated render starting..."
     });
 
-    try {
-      const selectedBgmTrack = BGM_TRACKS.find((t) => t.id === selectedBgmId);
-      const bgmUrl = selectedBgmTrack?.file || selectedBgmUrl || (customBgmFile ? URL.createObjectURL(customBgmFile) : null);
+    const activeApi = getActiveApiUrl(apiUrl);
+    const fileSizeMB = videoFile.size / (1024 * 1024);
 
-      const result = await renderCaptionedVideoClientSide(
-        videoFile,
-        wordsList,
-        {
-          styleName,
-          fontChoice,
-          fontSize,
-          position,
-          wordsPerChunk,
-          enableEmojis,
-          activeStyle,
-          customFontFamily,
-          playbackRate: 1.0,
-          resolution: targetRes,
-          bgmAudioUrl: bgmUrl,
-          bgmVolume: bgmVolume,
-          sfxStyle: sfxStyle
-        },
-        (pct, step) => {
-          setRenderProgress(pct);
-          setRenderStep(step);
-          toast.loading(step, {
+    try {
+      let jobId: string | null = null;
+      let currentVideoId = uploadedVideoIdRef.current || uploadedVideoId;
+
+      // If background upload is still finishing up, wait briefly for it
+      if (!currentVideoId && isBgUploadingRef.current && bgUploadPromiseRef.current) {
+        setRenderStep("Finalizing fast video sync...");
+        try {
+          currentVideoId = await Promise.race([
+            bgUploadPromiseRef.current,
+            new Promise<null>((r) => setTimeout(() => r(null), 2500))
+          ]);
+        } catch {
+          currentVideoId = null;
+        }
+      }
+
+      // CASE 1: ZERO-WAIT FAST EXPORT (Using cached video on engine)
+      if (currentVideoId) {
+        setRenderProgress(20);
+        setRenderStep("0s Upload! Submitting render manifest to FFmpeg engine...");
+        toast.loading("⚡ Fast Render Starting...", {
+          id: toastId,
+          description: "Video pre-cached. Engine burning animated subtitles..."
+        });
+
+        const cachedForm = new FormData();
+        cachedForm.append("video_id", currentVideoId);
+        cachedForm.append("style_name", styleName);
+        cachedForm.append("words_per_chunk", wordsPerChunk.toString());
+        cachedForm.append("caption_position", position);
+        cachedForm.append("font_size", fontSize.toString());
+        cachedForm.append("export_resolution", targetRes);
+        cachedForm.append("enable_emojis", enableEmojis ? "true" : "false");
+        cachedForm.append("font_choice", fontChoice);
+        cachedForm.append("remove_silence", removeSilence ? "true" : "false");
+        cachedForm.append("enable_sfx", enableSfx ? "true" : "false");
+        cachedForm.append("sfx_style", sfxStyle);
+        cachedForm.append("sfx_volume", sfxVolume.toString());
+        if (customFontFile) cachedForm.append("custom_font", customFontFile);
+        if (selectedBgmUrl) {
+          cachedForm.append("bg_music_url", selectedBgmUrl);
+          cachedForm.append("bg_music_volume", bgmVolume.toString());
+          cachedForm.append("enable_auto_ducking", enableAutoDucking ? "true" : "false");
+          cachedForm.append("bg_music_start_offset", bgmStartOffset.toString());
+        } else if (selectedBgmId && selectedBgmId !== "none" && selectedBgmId !== "custom") {
+          cachedForm.append("bg_music_id", selectedBgmId);
+          cachedForm.append("bg_music_volume", bgmVolume.toString());
+          cachedForm.append("enable_auto_ducking", enableAutoDucking ? "true" : "false");
+          cachedForm.append("bg_music_start_offset", bgmStartOffset.toString());
+        }
+        if (customBgmFile) {
+          cachedForm.append("custom_bg_music", customBgmFile);
+          cachedForm.append("bg_music_volume", bgmVolume.toString());
+          cachedForm.append("enable_auto_ducking", enableAutoDucking ? "true" : "false");
+          cachedForm.append("bg_music_start_offset", bgmStartOffset.toString());
+        }
+        if (groqKey) cachedForm.append("groq_api_key", groqKey);
+        if (wordsList && wordsList.length > 0) {
+          cachedForm.append("words_json", JSON.stringify(wordsList));
+        } else if (editableTranscript && editableTranscript.trim()) {
+          cachedForm.append("words_json", editableTranscript);
+        }
+
+        const res = await fetch(`${activeApi}/api/render-cached`, {
+          method: "POST",
+          body: cachedForm
+        });
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.detail || `Render initiation failed with status ${res.status}`);
+        }
+
+        const data = await res.json();
+        jobId = data.job_id;
+      } else {
+        // CASE 2: DIRECT TRANSFER WITH LIVE PROGRESS
+        setRenderStep("Transferring video to engine...");
+        const formData = new FormData();
+        formData.append("file", videoFile);
+        formData.append("style_name", styleName);
+        formData.append("words_per_chunk", wordsPerChunk.toString());
+        formData.append("caption_position", position);
+        formData.append("font_size", fontSize.toString());
+        formData.append("export_resolution", targetRes);
+        formData.append("enable_emojis", enableEmojis ? "true" : "false");
+        formData.append("font_choice", fontChoice);
+        formData.append("remove_silence", removeSilence ? "true" : "false");
+        formData.append("enable_sfx", enableSfx ? "true" : "false");
+        formData.append("sfx_style", sfxStyle);
+        formData.append("sfx_volume", sfxVolume.toString());
+        if (customFontFile) formData.append("custom_font", customFontFile);
+        if (selectedBgmUrl) {
+          formData.append("bg_music_url", selectedBgmUrl);
+          formData.append("bg_music_volume", bgmVolume.toString());
+          formData.append("enable_auto_ducking", enableAutoDucking ? "true" : "false");
+          formData.append("bg_music_start_offset", bgmStartOffset.toString());
+        } else if (selectedBgmId && selectedBgmId !== "none" && selectedBgmId !== "custom") {
+          formData.append("bg_music_id", selectedBgmId);
+          formData.append("bg_music_volume", bgmVolume.toString());
+          formData.append("enable_auto_ducking", enableAutoDucking ? "true" : "false");
+          formData.append("bg_music_start_offset", bgmStartOffset.toString());
+        }
+        if (customBgmFile) {
+          formData.append("custom_bg_music", customBgmFile);
+          formData.append("bg_music_volume", bgmVolume.toString());
+          formData.append("enable_auto_ducking", enableAutoDucking ? "true" : "false");
+          formData.append("bg_music_start_offset", bgmStartOffset.toString());
+        }
+        if (groqKey) formData.append("groq_api_key", groqKey);
+        if (wordsList && wordsList.length > 0) {
+          formData.append("words_json", JSON.stringify(wordsList));
+        } else if (editableTranscript && editableTranscript.trim()) {
+          formData.append("words_json", editableTranscript);
+        }
+
+        const uploadResult: any = await new Promise((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open("POST", `${activeApi}/api/render`);
+          xhr.timeout = 600000;
+
+          xhr.upload.onprogress = (e) => {
+            if (e.lengthComputable) {
+              const uploadPct = Math.round((e.loaded / e.total) * 100);
+              if (uploadPct >= 100) {
+                setRenderProgress(25);
+                setRenderStep("Video transferred! Engine starting FFmpeg render queue...");
+              } else {
+                setRenderProgress(Math.min(24, Math.round(uploadPct * 0.24)));
+                setRenderStep(`Transferring video: ${uploadPct}% (${((e.loaded) / (1024 * 1024)).toFixed(1)}MB / ${((e.total) / (1024 * 1024)).toFixed(1)}MB)`);
+                toast.loading(`Transferring video (${uploadPct}%)...`, {
+                  id: toastId,
+                  description: `${((e.loaded) / (1024 * 1024)).toFixed(1)}MB of ${((e.total) / (1024 * 1024)).toFixed(1)}MB`
+                });
+              }
+            }
+          };
+
+          xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+              try {
+                resolve(JSON.parse(xhr.responseText));
+              } catch (err) {
+                reject(new Error("Invalid JSON response from server"));
+              }
+            } else {
+              try {
+                const errData = JSON.parse(xhr.responseText);
+                reject(new Error(errData.detail || `Upload failed with status ${xhr.status}`));
+              } catch {
+                reject(new Error(`Server error (${xhr.status})`));
+              }
+            }
+          };
+
+          xhr.onerror = () => reject(new Error("Network connection error. Please verify engine status."));
+          xhr.ontimeout = () => reject(new Error("Upload timed out."));
+          xhr.send(formData);
+        });
+
+        jobId = uploadResult.job_id;
+      }
+
+      if (!jobId) throw new Error("No job ID received from render engine.");
+
+      // STEP 2: POLL RENDER PROGRESS UNTIL MP4 COMPLETION
+      let isFinished = false;
+      let attempts = 0;
+      const maxAttempts = 600;
+
+      while (!isFinished && attempts < maxAttempts) {
+        attempts++;
+        await new Promise((r) => setTimeout(r, 1200));
+
+        const pollRes = await fetch(`${activeApi}/api/render/${jobId}`);
+        if (!pollRes.ok) {
+          throw new Error(`Failed to query render status (HTTP ${pollRes.status})`);
+        }
+
+        const jobStatus = await pollRes.json();
+
+        if (jobStatus.status === "failed") {
+          throw new Error(jobStatus.error || "Video rendering failed on engine.");
+        }
+
+        if (jobStatus.status === "rendering") {
+          const currentPct = Math.max(25, jobStatus.progress || 30);
+          setRenderProgress(currentPct);
+          const stageDesc = jobStatus.stage || "Burning animated subtitles with FFmpeg...";
+          setRenderStep(stageDesc);
+          toast.loading(`Burning subtitles: ${currentPct}%`, {
             id: toastId,
-            description: "0s upload • Hardware GPU accelerated encoding active."
+            description: stageDesc
           });
         }
-      );
 
-      const blobUrl = URL.createObjectURL(result.blob);
-      setExportedVideoUrl(blobUrl);
-      setRenderProgress(100);
-      setRenderStep("Export complete!");
+        if (jobStatus.status === "done") {
+          isFinished = true;
+          setRenderProgress(100);
+          setRenderStep("Render complete! Downloading...");
 
-      // Auto-trigger download
-      const ext = result.mimeType.includes("mp4") ? "mp4" : "webm";
-      const a = document.createElement("a");
-      a.href = blobUrl;
-      a.download = `${videoFile.name.replace(/\.[^/.]+$/, "")}_${targetRes}_captioned.${ext}`;
-      a.click();
+          const downloadUrl = `${activeApi}/api/render/${jobId}/download`;
+          setExportedVideoUrl(downloadUrl);
 
-      toast.success(`${resLabel} Reel Exported & Downloaded! 🎉`, {
-        id: toastId,
-        description: `Exported directly on your device GPU without slow cloud uploads!`
-      });
+          let shareUrl = jobStatus.cloud_url;
+          if (!shareUrl) {
+            shareUrl = downloadUrl;
+          } else if (!shareUrl.startsWith("http")) {
+            shareUrl = `${activeApi}${shareUrl.startsWith("/") ? "" : "/"}${shareUrl}`;
+          }
+          setCloudShareUrl(shareUrl);
+
+          // Auto-trigger browser download of high-quality MP4
+          try {
+            const cleanStem = videoFile.name.replace(/\.[^/.]+$/, "") || "reel";
+            const a = document.createElement("a");
+            a.href = downloadUrl;
+            a.download = `${cleanStem}_${targetRes}_captioned.mp4`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+          } catch (dlErr) {
+            console.warn("Auto-download notice:", dlErr);
+          }
+
+          toast.success(`${resLabel} Reel Exported & Downloaded! 🎉`, {
+            id: toastId,
+            description: "High-quality MP4 with hard-coded captions ready for Reels, TikTok & Shorts!"
+          });
+          return;
+        }
+      }
+
+      if (!isFinished) {
+        throw new Error("Render job timed out. Server may be busy.");
+      }
+
     } catch (err: any) {
-      console.warn("Client-side render error, fallback available:", err);
-      toast.error("Device Export Failed", {
+      console.error("Render error:", err);
+      const friendlyMsg = err?.message || "Failed to render video with captions";
+      setErrorMessage(friendlyMsg);
+      toast.error("Export Failed", {
         id: toastId,
-        description: `${err?.message || "Browser canvas recording error"}. You can also use Cloud Export.`
+        description: friendlyMsg
       });
-      setErrorMessage(err?.message || "Client-side export failed");
     } finally {
       setIsRendering(false);
     }
-  };
-
-  // Full Video Render (100% Local Device GPU Render - 0 MB Cloud Upload)
-  const handleRenderVideo = async () => {
-    await handleClientSideRender();
   };
 
   const activeStyle = STYLE_PRESETS[styleName] || STYLE_PRESETS["Hormozi Boxed 2.0 (Solid Box Behind Word)"];
@@ -949,10 +1221,10 @@ export default function StudioPage() {
 
           {/* Primary Action: Direct Zero-Wait High Bitrate Export */}
           <button
-            onClick={handleRenderVideo}
+            onClick={() => handleRenderVideo()}
             disabled={isRendering || !videoFile}
             className="h-8 px-2.5 sm:px-4 rounded-md bg-gradient-to-r from-amber-500 via-amber-400 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black font-extrabold text-xs flex items-center gap-1.5 shadow-md shadow-amber-500/20 active:scale-95 disabled:opacity-40 transition-all cursor-pointer"
-            title="100% Local Device GPU Render (0 MB Cloud Upload)"
+            title="Export Reel: Broadcast H.264 MP4 with Hard-Burned Captions"
           >
             {isRendering ? (
               <>
@@ -1056,13 +1328,25 @@ export default function StudioPage() {
                 </span>
               </label>
 
-              {/* On-Device GPU Engine Status */}
+              {/* Engine & Upload Status */}
               {videoFile && (
                 <div className="mt-1 flex items-center justify-between px-1 text-[10px]">
-                  <span className="flex items-center gap-1 text-emerald-400 font-semibold">
-                    <Check className="h-3 w-3 text-emerald-400" />
-                    <span>Local GPU Engine Ready (0 MB Cloud)</span>
-                  </span>
+                  {isBgUploading ? (
+                    <span className="flex items-center gap-1 text-amber-400 font-medium">
+                      <RefreshCw className="h-3 w-3 animate-spin text-amber-400" />
+                      <span>Syncing: {bgUploadProgress}%</span>
+                    </span>
+                  ) : bgUploadDone || uploadedVideoId ? (
+                    <span className="flex items-center gap-1 text-emerald-400 font-semibold">
+                      <Check className="h-3 w-3 text-emerald-400" />
+                      <span>Synced (0s Instant Export Ready)</span>
+                    </span>
+                  ) : (
+                    <span className="flex items-center gap-1 text-emerald-400 font-semibold">
+                      <Check className="h-3 w-3 text-emerald-400" />
+                      <span>Render Engine Ready</span>
+                    </span>
+                  )}
                   <span className="text-slate-400 font-mono">{(videoFile.size / (1024 * 1024)).toFixed(1)} MB</span>
                 </div>
               )}
@@ -2289,16 +2573,16 @@ export default function StudioPage() {
                 className="w-full h-11 rounded-xl bg-gradient-to-r from-amber-500 via-amber-400 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black font-black text-xs flex items-center justify-center gap-2 shadow-lg shadow-amber-500/25 active:scale-95 transition-all cursor-pointer mt-2"
               >
                 <Download className="h-4 w-4" />
-                <span>Export Reel in {exportResolution.toUpperCase()} (193MB+ Locked)</span>
+                <span>Export Reel in {exportResolution.toUpperCase()} (Broadcast H.264 MP4)</span>
               </button>
             </div>
 
             <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800 flex items-center justify-between text-[11px] text-slate-400">
               <span className="flex items-center gap-1.5">
                 <span className="h-2 w-2 rounded-full bg-emerald-400" />
-                <span>100% On-Device GPU Render (0 MB Cloud Upload)</span>
+                <span>Hardware Accelerated FFmpeg Render (High-Fidelity MP4)</span>
               </span>
-              <span className="text-emerald-400 font-mono font-semibold">Hardware Accelerated</span>
+              <span className="text-emerald-400 font-mono font-semibold">100% Quality Locked</span>
             </div>
 
           </div>

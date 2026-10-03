@@ -56,8 +56,8 @@ temp_*
 !frontend/public/**/*
 !backend/assets/**/*
 backend/assets/bgm/*.wav
-assets/bgm/*.wav
-!assets/**/*
+assets/bgm/
+!assets/sfx/*
 
 # Binaries & Large Tools
 bin/ffmpeg.exe
