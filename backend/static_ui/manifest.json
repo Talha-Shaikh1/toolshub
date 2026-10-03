@@ -1,0 +1,16 @@
+{
+  "name": "FlowCreator Studio Pro",
+  "short_name": "FlowCreator",
+  "description": "AI Animated Subtitles, Alex Hormozi 2.0 Boxed Subtitles, SFX & 4K/8K Upscaler",
+  "start_url": "/studio",
+  "display": "standalone",
+  "background_color": "#090D16",
+  "theme_color": "#F59E0B",
+  "icons": [
+    {
+      "src": "/favicon.ico",
+      "sizes": "256x256",
+      "type": "image/x-icon"
+    }
+  ]
+}
